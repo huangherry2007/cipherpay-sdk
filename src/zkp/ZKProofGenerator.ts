@@ -1,4 +1,7 @@
 import { ShieldedNote } from '../core/NoteManager';
+import * as snarkjs from 'snarkjs';
+import { readFileSync } from 'fs';
+import { join } from 'path';
 
 export interface TransferProofInput {
   inputNotes: ShieldedNote[];
@@ -19,24 +22,38 @@ export interface ReshieldProofInput {
   viewKey: string;
 }
 
-export interface TransferProofOutput {
-  proof: string;
-  publicInputs: string[];
+export interface ZKProof {
+  proof: {
+    pi_a: string[];
+    pi_b: string[][];
+    pi_c: string[];
+    protocol: string;
+    curve: string;
+  };
+  publicSignals: string[];
+  timestamp: number;
 }
 
 export class ZKProofGenerator {
-  private readonly circuitPath: string;
-  private readonly provingKeyPath: string;
-  private readonly verificationKeyPath: string;
+  private readonly wasmBuffer: Buffer;
+  private readonly zkeyBuffer: Buffer;
+  private readonly verificationKey: any;
 
   constructor(
-    circuitPath: string,
-    provingKeyPath: string,
+    wasmPath: string,
+    zkeyPath: string,
     verificationKeyPath: string
   ) {
-    this.circuitPath = circuitPath;
-    this.provingKeyPath = provingKeyPath;
-    this.verificationKeyPath = verificationKeyPath;
+    try {
+      this.wasmBuffer = readFileSync(wasmPath);
+      this.zkeyBuffer = readFileSync(zkeyPath);
+      this.verificationKey = JSON.parse(readFileSync(verificationKeyPath, 'utf8'));
+    } catch (error) {
+      if (error instanceof Error) {
+        throw new Error(`Failed to load proof files: ${error.message}`);
+      }
+      throw new Error('Failed to load proof files: Unknown error');
+    }
   }
 
   /**
@@ -44,27 +61,37 @@ export class ZKProofGenerator {
    * @param input The input data for the proof generation
    * @returns The generated proof and public inputs
    */
-  async generateTransferProof(input: TransferProofInput): Promise<TransferProofOutput> {
+  async generateTransferProof(input: TransferProofInput): Promise<ZKProof> {
     try {
-      // TODO: Implement actual ZKP generation using the external circuit
-      // This is a placeholder that should be replaced with actual circuit integration
-      // The actual implementation would:
-      // 1. Load the circuit from cipherpay-circuits
-      // 2. Generate witness from input data
-      // 3. Generate proof using the circuit and proving key
-      // 4. Return the proof and public inputs
+      // Prepare witness
+      const witness = {
+        // Private inputs
+        inAmount: input.inputNotes[0].amount.toString(),
+        inNullifier: input.inputNotes[0].nullifier,
+        inSecret: input.viewKey,
+        inPathElements: input.inputNotes[0].merklePath.elements,
+        inPathIndices: input.inputNotes[0].merklePath.indices,
 
-      // For now, return a dummy proof
+        // Public inputs
+        outCommitment: input.outputNote.commitment,
+        merkleRoot: input.inputNotes[0].merkleRoot,
+        recipientPubKey: input.outputNote.recipientPubKey
+      };
+
+      // Generate proof using snarkjs
+      const { proof, publicSignals } = await snarkjs.groth16.fullProve(
+        witness,
+        this.wasmBuffer.toString(),
+        this.zkeyBuffer.toString()
+      );
+
       return {
-        proof: '0x' + '0'.repeat(64),
-        publicInputs: [
-          // Input note commitments
-          ...input.inputNotes.map(note => note.commitment),
-          // Output note commitment
-          input.outputNote.commitment,
-          // Total amount
-          input.outputNote.amount.toString()
-        ]
+        proof: {
+          ...proof,
+          curve: 'bn128' // Required by snarkjs type
+        },
+        publicSignals,
+        timestamp: Date.now()
       };
     } catch (error) {
       if (error instanceof Error) {
@@ -79,27 +106,36 @@ export class ZKProofGenerator {
    * @param input The input data for the proof generation
    * @returns The generated proof and public inputs
    */
-  async generateWithdrawProof(input: WithdrawProofInput): Promise<TransferProofOutput> {
+  async generateWithdrawProof(input: WithdrawProofInput): Promise<ZKProof> {
     try {
-      // TODO: Implement actual ZKP generation using the external circuit
-      // This is a placeholder that should be replaced with actual circuit integration
-      // The actual implementation would:
-      // 1. Load the withdrawal circuit from cipherpay-circuits
-      // 2. Generate witness from input data
-      // 3. Generate proof using the circuit and proving key
-      // 4. Return the proof and public inputs
+      // Prepare witness
+      const witness = {
+        // Private inputs
+        inAmount: input.amount.toString(),
+        inNullifier: input.inputNotes[0].nullifier,
+        inSecret: input.viewKey,
+        inPathElements: input.inputNotes[0].merklePath.elements,
+        inPathIndices: input.inputNotes[0].merklePath.indices,
 
-      // For now, return a dummy proof
+        // Public inputs
+        recipientAddress: input.recipientAddress,
+        merkleRoot: input.inputNotes[0].merkleRoot
+      };
+
+      // Generate proof using snarkjs
+      const { proof, publicSignals } = await snarkjs.groth16.fullProve(
+        witness,
+        this.wasmBuffer.toString(),
+        this.zkeyBuffer.toString()
+      );
+
       return {
-        proof: '0x' + '0'.repeat(64),
-        publicInputs: [
-          // Input note commitments
-          ...input.inputNotes.map(note => note.commitment),
-          // Recipient address
-          input.recipientAddress,
-          // Total amount
-          input.amount.toString()
-        ]
+        proof: {
+          ...proof,
+          curve: 'bn128' // Required by snarkjs type
+        },
+        publicSignals,
+        timestamp: Date.now()
       };
     } catch (error) {
       if (error instanceof Error) {
@@ -114,25 +150,35 @@ export class ZKProofGenerator {
    * @param input The input data for the proof generation
    * @returns The generated proof and public inputs
    */
-  async generateReshieldProof(input: ReshieldProofInput): Promise<TransferProofOutput> {
+  async generateReshieldProof(input: ReshieldProofInput): Promise<ZKProof> {
     try {
-      // TODO: Implement actual ZKP generation using the external circuit
-      // This is a placeholder that should be replaced with actual circuit integration
-      // The actual implementation would:
-      // 1. Load the reshield circuit from cipherpay-circuits
-      // 2. Generate witness from input data
-      // 3. Generate proof using the circuit and proving key
-      // 4. Return the proof and public inputs
+      // Prepare witness
+      const witness = {
+        // Private inputs
+        inAmount: input.amount.toString(),
+        inNullifier: input.inputNotes[0].nullifier,
+        inSecret: input.viewKey,
+        inPathElements: input.inputNotes[0].merklePath.elements,
+        inPathIndices: input.inputNotes[0].merklePath.indices,
 
-      // For now, return a dummy proof
+        // Public inputs
+        merkleRoot: input.inputNotes[0].merkleRoot
+      };
+
+      // Generate proof using snarkjs
+      const { proof, publicSignals } = await snarkjs.groth16.fullProve(
+        witness,
+        this.wasmBuffer.toString(),
+        this.zkeyBuffer.toString()
+      );
+
       return {
-        proof: '0x' + '0'.repeat(64),
-        publicInputs: [
-          // Input note commitments
-          ...input.inputNotes.map(note => note.commitment),
-          // Total amount
-          input.amount.toString()
-        ]
+        proof: {
+          ...proof,
+          curve: 'bn128' // Required by snarkjs type
+        },
+        publicSignals,
+        timestamp: Date.now()
       };
     } catch (error) {
       if (error instanceof Error) {
@@ -145,20 +191,16 @@ export class ZKProofGenerator {
   /**
    * Verifies a zero-knowledge proof
    * @param proof The proof to verify
-   * @param publicInputs The public inputs used in the proof
+   * @param publicSignals The public signals used in the proof
    * @returns boolean indicating if the proof is valid
    */
-  async verifyProof(proof: string, publicInputs: string[]): Promise<boolean> {
+  async verifyProof(proof: ZKProof['proof'], publicSignals: string[]): Promise<boolean> {
     try {
-      // TODO: Implement actual ZKP verification using the external circuit
-      // This is a placeholder that should be replaced with actual circuit verification
-      // The actual implementation would:
-      // 1. Load the verification key
-      // 2. Verify the proof using the verification key and public inputs
-      // 3. Return the verification result
-
-      // For now, return true for testing
-      return true;
+      return await snarkjs.groth16.verify(
+        this.verificationKey,
+        publicSignals,
+        proof
+      );
     } catch (error) {
       if (error instanceof Error) {
         throw new Error(`Failed to verify proof: ${error.message}`);

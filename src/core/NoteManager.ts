@@ -1,6 +1,11 @@
 import { ethers } from 'ethers';
 import { randomBytes, createCipheriv, createDecipheriv, createHash } from 'crypto';
 
+export interface MerklePath {
+  elements: string[];
+  indices: number[];
+}
+
 export interface ShieldedNote {
   commitment: string;
   nullifier: string;
@@ -9,6 +14,9 @@ export interface ShieldedNote {
   spent: boolean;
   timestamp: number;
   recipientAddress?: string;
+  merklePath: MerklePath;
+  merkleRoot: string;
+  recipientPubKey: string;
 }
 
 export interface NoteEncryption {
@@ -158,7 +166,10 @@ export class NoteManager {
         amount: BigInt(noteData.amount),
         encryptedNote: encrypted.ciphertext,
         spent: false,
-        timestamp: noteData.timestamp
+        timestamp: noteData.timestamp,
+        merklePath: noteData.merklePath,
+        merkleRoot: noteData.merkleRoot,
+        recipientPubKey: noteData.recipientPubKey
       };
     } catch (error) {
       if (error instanceof Error) {
