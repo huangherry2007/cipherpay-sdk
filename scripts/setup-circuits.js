@@ -61,7 +61,16 @@ async function main() {
         execSync('node scripts/setup.js', { cwd: CIRCUITS_ROOT, stdio: 'inherit' });
 
         // Copy circuit files
-        const circuits = ['transfer', 'merkle', 'nullifier'];
+        const circuits = [
+            'transfer',
+            'merkle',
+            'nullifier',
+            'audit_proof',
+            'withdraw',
+            'zkStream',
+            'zkSplit',
+            'zkCondition'
+        ];
         circuits.forEach(copyCircuitFiles);
 
         console.log('\n✓ Circuit setup complete!');
