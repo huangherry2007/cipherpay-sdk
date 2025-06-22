@@ -31,6 +31,142 @@ The CipherPay SDK provides developers with the tools to generate, manage, and su
 
 ---
 
+## Zero-Knowledge Circuits
+
+The SDK includes a comprehensive set of zero-knowledge circuits for various privacy-preserving operations:
+
+### Core Circuits
+
+#### Transfer Circuit (`transfer.circom`)
+Handles private transfers between users with full privacy guarantees.
+```typescript
+import { TransferProver } from '@cipherpay/sdk'
+
+const prover = new TransferProver()
+const proof = await prover.generateProof({
+  inputNotes: [note1, note2],
+  outputNotes: [outputNote1, outputNote2],
+  recipient: recipientAddress,
+  amount: transferAmount,
+  fee: feeAmount
+})
+```
+
+#### Merkle Circuit (`merkle.circom`)
+Manages Merkle tree operations for note commitment verification.
+```typescript
+import { MerkleProver } from '@cipherpay/sdk'
+
+const prover = new MerkleProver()
+const proof = await prover.generateProof({
+  leaf: noteCommitment,
+  path: merklePath,
+  root: merkleRoot
+})
+```
+
+#### Nullifier Circuit (`nullifier.circom`)
+Generates and verifies nullifiers for spent notes to prevent double-spending.
+```typescript
+import { NullifierProver } from '@cipherpay/sdk'
+
+const prover = new NullifierProver()
+const nullifier = await prover.generateNullifier({
+  noteCommitment: note.commitment,
+  secret: note.secret
+})
+```
+
+### Specialized Circuits
+
+#### ZK Stream Circuit (`zkStream.circom`)
+Handles streaming payments with time-based release mechanisms.
+```typescript
+import { ZKStreamProver } from '@cipherpay/sdk'
+
+const prover = new ZKStreamProver()
+const proof = await prover.generateProof({
+  commitment: streamCommitment,
+  recipient: recipientAddress,
+  startTime: startTimestamp,
+  endTime: endTimestamp,
+  currentTime: currentTimestamp,
+  amount: streamAmount
+})
+```
+
+#### ZK Split Circuit (`zkSplit.circom`)
+Manages payment splitting among multiple recipients with privacy.
+```typescript
+import { ZKSplitProver } from '@cipherpay/sdk'
+
+const prover = new ZKSplitProver()
+const proof = await prover.generateProof({
+  inputNote: inputNote,
+  outputNotes: [split1, split2, split3],
+  totalAmount: totalAmount
+})
+```
+
+#### ZK Condition Circuit (`zkCondition.circom`)
+Handles conditional payments with various condition types (time-based, event-based, threshold-based).
+```typescript
+import { ZKConditionProver } from '@cipherpay/sdk'
+
+const prover = new ZKConditionProver()
+const proof = await prover.generateProof({
+  commitment: conditionCommitment,
+  conditionType: 0, // 0: time-based, 1: event-based, 2: threshold-based
+  conditionData: conditionParameters,
+  recipient: recipientAddress,
+  amount: paymentAmount
+})
+```
+
+### Utility Circuits
+
+#### Audit Proof Circuit (`audit_proof.circom`)
+Generates audit proofs for compliance and regulatory requirements.
+```typescript
+import { AuditProofProver } from '@cipherpay/sdk'
+
+const prover = new AuditProofProver()
+const proof = await prover.generateProof({
+  notes: [note1, note2, note3],
+  viewKey: viewKey,
+  totalAmount: totalAmount,
+  timestamp: auditTimestamp
+})
+```
+
+#### Withdraw Circuit (`withdraw.circom`)
+Handles withdrawal of funds from private to public addresses.
+```typescript
+import { WithdrawProver } from '@cipherpay/sdk'
+
+const prover = new WithdrawProver()
+const proof = await prover.generateProof({
+  inputNotes: [note1, note2],
+  recipient: publicAddress,
+  amount: withdrawalAmount,
+  fee: feeAmount
+})
+```
+
+### Circuit Files
+
+The SDK includes the following circuit files in `src/zk/circuits/`:
+- `transfer.wasm` / `transfer.zkey` / `verifier-transfer.json`
+- `merkle.wasm` / `merkle.zkey` / `verifier-merkle.json`
+- `nullifier.wasm` / `nullifier.zkey` / `verifier-nullifier.json`
+- `zkStream.wasm` / `zkStream.zkey` / `verifier-zkStream.json`
+- `zkSplit.wasm` / `zkSplit.zkey` / `verifier-zkSplit.json`
+- `zkCondition.wasm` / `zkCondition.zkey` / `verifier-zkCondition.json`
+- `audit_proof.wasm` / `audit_proof.zkey` / `verifier-audit_proof.json`
+- `withdraw.wasm` / `withdraw.zkey` / `verifier-withdraw.json`
+
+---
+
 ## Installation
 
 ```bash
