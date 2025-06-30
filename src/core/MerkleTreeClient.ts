@@ -1,5 +1,5 @@
 import { ethers } from 'ethers';
-import { poseidon } from 'poseidon-lite';
+import { poseidon1 } from 'poseidon-lite';
 import { MerkleTree } from 'merkletreejs';
 
 export interface MerkleProof {
@@ -16,7 +16,7 @@ export class MerkleTreeClient {
   constructor(contractInstance: ethers.Contract) {
     this.contract = contractInstance;
     this.leaves = [];
-    this.tree = new MerkleTree([], poseidon, { sortPairs: true });
+    this.tree = new MerkleTree([], (data: any) => poseidon1(data).toString(), { sortPairs: true });
   }
 
   /**
@@ -28,7 +28,8 @@ export class MerkleTreeClient {
       const root = await this.contract.getMerkleRoot();
       return root;
     } catch (error) {
-      throw new Error(`Failed to fetch Merkle root: ${error.message}`);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      throw new Error(`Failed to fetch Merkle root: ${errorMessage}`);
     }
   }
 
@@ -55,7 +56,8 @@ export class MerkleTreeClient {
         root
       };
     } catch (error) {
-      throw new Error(`Failed to get Merkle path: ${error.message}`);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      throw new Error(`Failed to get Merkle path: ${errorMessage}`);
     }
   }
 
@@ -63,13 +65,13 @@ export class MerkleTreeClient {
    * Verifies a Merkle inclusion proof
    * @param commitment The commitment to verify
    * @param proof The Merkle proof
-   * @param hashFn The hash function to use (defaults to poseidon)
+   * @param hashFn The hash function to use (defaults to poseidon1)
    * @returns boolean Whether the proof is valid
    */
   verifyPath(
     commitment: string,
     proof: MerkleProof,
-    hashFn: (data: any) => string = poseidon
+    hashFn: (data: any) => string = (data) => poseidon1(data).toString()
   ): boolean {
     try {
       let current = commitment;
@@ -88,7 +90,8 @@ export class MerkleTreeClient {
       // Compare with the root
       return current === proof.root;
     } catch (error) {
-      throw new Error(`Failed to verify Merkle path: ${error.message}`);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      throw new Error(`Failed to verify Merkle path: ${errorMessage}`);
     }
   }
 
@@ -102,9 +105,10 @@ export class MerkleTreeClient {
       this.leaves = [...this.leaves, ...newLeaves];
       
       // Rebuild the tree
-      this.tree = new MerkleTree(this.leaves, poseidon, { sortPairs: true });
+      this.tree = new MerkleTree(this.leaves, (data: any) => poseidon1(data).toString(), { sortPairs: true });
     } catch (error) {
-      throw new Error(`Failed to update Merkle tree: ${error.message}`);
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      throw new Error(`Failed to update Merkle tree: ${errorMessage}`);
     }
   }
 

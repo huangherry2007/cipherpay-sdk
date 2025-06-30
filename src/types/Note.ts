@@ -6,7 +6,12 @@ export interface ShieldedNote {
   spent: boolean;
   timestamp: number;
   recipientAddress: string;
+  merkleRoot?: string;
 }
+
+export type Note = ShieldedNote;
+export type NoteStatus = 'pending' | 'confirmed' | 'spent' | 'expired';
+export type NoteType = 'transfer' | 'withdraw' | 'reshield';
 
 export interface NoteMetadata {
   version: number;

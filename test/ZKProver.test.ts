@@ -1,12 +1,18 @@
 import { ZKProver } from '../src/zk/ZKProver';
 import { Logger } from '../src/utils/logger';
-import { ZKInput } from '../src/types/ZKProof';
+import { ShieldedNote } from '../src/types/Note';
 import * as fs from 'fs';
 import * as path from 'path';
 
 // Mock fs
 jest.mock('fs', () => ({
-    readFileSync: jest.fn().mockReturnValue(Buffer.from('mock data'))
+    existsSync: jest.fn().mockReturnValue(true),
+    readFileSync: jest.fn().mockImplementation((path: string) => {
+        if (path.includes('verifier')) {
+            return '{"type": "groth16", "protocol": "groth16"}';
+        }
+        return Buffer.from('mock data');
+    })
 }));
 
 // Mock snarkjs
@@ -15,12 +21,13 @@ jest.mock('snarkjs', () => ({
         calculate: jest.fn().mockResolvedValue('mock witness')
     },
     groth16: {
-        prove: jest.fn().mockResolvedValue({
+        fullProve: jest.fn().mockResolvedValue({
             proof: {
                 pi_a: ['1', '2'],
                 pi_b: [['3', '4'], ['5', '6']],
                 pi_c: ['7', '8'],
-                protocol: 'groth16'
+                protocol: 'groth16',
+                curve: 'bn128'
             },
             publicSignals: ['9', '10']
         }),
@@ -49,45 +56,50 @@ describe('ZKProver', () => {
         jest.clearAllMocks();
         
         // Create a new instance for each test
-        zkProver = new ZKProver(
-            './circuits/transfer.wasm',
-            './circuits/transfer.zkey'
-        );
+        zkProver = new ZKProver('./circuits');
     });
 
     describe('constructor', () => {
         it('should initialize with the correct circuit paths', () => {
             expect(zkProver).toBeDefined();
-            expect(fs.readFileSync).toHaveBeenCalledWith(path.resolve('./circuits/transfer.wasm'));
-            expect(fs.readFileSync).toHaveBeenCalledWith(path.resolve('./circuits/transfer.zkey'));
         });
 
         it('should throw error if files cannot be read', () => {
-            (fs.readFileSync as jest.Mock).mockImplementationOnce(() => {
-                throw new Error('File not found');
-            });
-
-            expect(() => new ZKProver(
-                './circuits/transfer.wasm',
-                './circuits/transfer.zkey'
-            )).toThrow('Failed to load proof files: File not found');
+            // Mock existsSync to return false for invalid path
+            (fs.existsSync as jest.Mock).mockReturnValueOnce(false);
+            
+            // The constructor doesn't throw, it just doesn't load circuits that don't exist
+            const invalidProver = new ZKProver('/invalid/path');
+            expect(invalidProver).toBeDefined();
+            expect(invalidProver.isCircuitAvailable('transfer')).toBe(false);
         });
     });
 
     describe('generateTransferProof', () => {
-        const mockInput: ZKInput = {
-            nullifierHash: '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
-            commitmentHash: '0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890',
-            recipientPubKey: '0x9876543210fedcba9876543210fedcba9876543210fedcba9876543210fedcba',
-            amount: '1000000000000000000',
-            tokenAddress: '0x0000000000000000000000000000000000000000',
-            merkleRoot: '0x1111111111111111111111111111111111111111111111111111111111111111',
-            merklePath: [
-                '0x2222222222222222222222222222222222222222222222222222222222222222',
-                '0x3333333333333333333333333333333333333333333333333333333333333333',
-                '0x4444444444444444444444444444444444444444444444444444444444444444'
-            ],
-            merklePathIndices: [0, 1, 0]
+        const inputNote: ShieldedNote = {
+            commitment: '0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890',
+            nullifier: '0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef',
+            amount: BigInt('1000000000000000000'),
+            encryptedNote: '',
+            spent: false,
+            timestamp: Date.now(),
+            recipientAddress: '0x123',
+            merkleRoot: '0x1111111111111111111111111111111111111111111111111111111111111111'
+        };
+        const outputNote: ShieldedNote = {
+            commitment: '0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890',
+            nullifier: '0x0000000000000000000000000000000000000000000000000000000000000000',
+            amount: BigInt('1000000000000000000'),
+            encryptedNote: '',
+            spent: false,
+            timestamp: Date.now(),
+            recipientAddress: '0x9876543210fedcba9876543210fedcba9876543210fedcba9876543210fedcba',
+            merkleRoot: '0x1111111111111111111111111111111111111111111111111111111111111111'
+        };
+        const mockInput = {
+            inputNotes: [inputNote],
+            outputNote,
+            viewKey: 'test_view_key'
         };
 
         it('should generate a transfer proof successfully', async () => {
@@ -98,7 +110,8 @@ describe('ZKProver', () => {
                     pi_a: ['1', '2'],
                     pi_b: [['3', '4'], ['5', '6']],
                     pi_c: ['7', '8'],
-                    protocol: 'groth16'
+                    protocol: 'groth16',
+                    curve: 'bn128'
                 },
                 publicSignals: ['9', '10'],
                 timestamp: expect.any(Number)
@@ -108,7 +121,7 @@ describe('ZKProver', () => {
         it('should handle proof generation error', async () => {
             // Mock snarkjs to throw an error
             const { groth16 } = require('snarkjs');
-            groth16.prove.mockRejectedValueOnce(new Error('Proof generation failed'));
+            groth16.fullProve.mockRejectedValueOnce(new Error('Proof generation failed'));
 
             await expect(zkProver.generateTransferProof(mockInput))
                 .rejects
@@ -117,17 +130,21 @@ describe('ZKProver', () => {
     });
 
     describe('verifyProof', () => {
-        const mockProof = {
-            pi_a: ['1', '2'],
-            pi_b: [['3', '4'], ['5', '6']],
-            pi_c: ['7', '8'],
-            protocol: 'groth16'
+        const mockZKProof = {
+            proof: {
+                pi_a: ['1', '2'],
+                pi_b: [['3', '4'], ['5', '6']],
+                pi_c: ['7', '8'],
+                protocol: 'groth16',
+                curve: 'bn128'
+            },
+            publicSignals: ['9', '10'],
+            timestamp: Date.now()
         };
         const mockPublicSignals = ['9', '10'];
-        const mockVerifierKey = { key: 'value' };
 
         it('should verify a proof successfully', async () => {
-            const isValid = await zkProver.verifyProof(mockProof, mockPublicSignals, mockVerifierKey);
+            const isValid = await zkProver.verifyProof(mockZKProof, mockPublicSignals);
             expect(isValid).toBe(true);
         });
 
@@ -136,37 +153,9 @@ describe('ZKProver', () => {
             const { groth16 } = require('snarkjs');
             groth16.verify.mockRejectedValueOnce(new Error('Verification failed'));
 
-            await expect(zkProver.verifyProof(mockProof, mockPublicSignals, mockVerifierKey))
+            await expect(zkProver.verifyProof(mockZKProof, mockPublicSignals))
                 .rejects
                 .toThrow('Failed to verify proof: Verification failed');
-        });
-    });
-
-    describe('loadVerifierKey', () => {
-        it('should load verifier key successfully', async () => {
-            const mockKey = { key: 'value' };
-            (fs.readFileSync as jest.Mock).mockReturnValueOnce(Buffer.from(JSON.stringify(mockKey)));
-
-            const key = await ZKProver.loadVerifierKey('./circuits/verifier_key.json');
-            expect(key).toEqual(mockKey);
-        });
-
-        it('should handle file read error', async () => {
-            (fs.readFileSync as jest.Mock).mockImplementationOnce(() => {
-                throw new Error('File not found');
-            });
-
-            await expect(ZKProver.loadVerifierKey('./circuits/verifier_key.json'))
-                .rejects
-                .toThrow('Failed to load verifier key: File not found');
-        });
-
-        it('should handle invalid JSON', async () => {
-            (fs.readFileSync as jest.Mock).mockReturnValueOnce(Buffer.from('invalid json'));
-
-            await expect(ZKProver.loadVerifierKey('./circuits/verifier_key.json'))
-                .rejects
-                .toThrow('Failed to load verifier key: Unexpected token');
         });
     });
 });

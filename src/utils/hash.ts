@@ -1,12 +1,17 @@
 import { utils } from 'ethers';
 
 /**
- * Hashes a string using keccak256
- * @param input String to hash
+ * Hashes a string or Buffer using keccak256
+ * @param input String or Buffer to hash
  * @returns Hashed string in hex format
  */
-export function hash(input: string): string {
-    return utils.keccak256(utils.toUtf8Bytes(input));
+export function hash(input: string | Buffer): string {
+    if (typeof input === 'string') {
+        return utils.keccak256(utils.toUtf8Bytes(input));
+    } else {
+        // Handle Buffer input
+        return utils.keccak256(input);
+    }
 }
 
 /**

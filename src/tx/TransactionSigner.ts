@@ -1,12 +1,13 @@
 import { ethers } from 'ethers';
 import { PublicKey, Transaction } from '@solana/web3.js';
 import { ChainType } from '../core/WalletProvider';
-import { EncryptedTx } from './TransactionBuilder';
+import { NoteManager } from '../core/NoteManager';
+import { ViewKeyManager } from '../core/ViewKeyManager';
 
 export interface SignedTransaction {
+  signature: string;
+  transactionData: any;
   chainType: ChainType;
-  signedTx: string;  // Hex string for Ethereum, base58 for Solana
-  txHash: string;
 }
 
 export interface SignerConfig {
@@ -15,171 +16,157 @@ export interface SignerConfig {
   rpcUrl: string;
 }
 
-export class TransactionSigner {
-  private readonly config: SignerConfig;
-  private readonly provider: ethers.providers.JsonRpcProvider | null;
-  private readonly solanaConnection: any; // TODO: Add proper Solana connection type
+export interface TransactionSignerConfig {
+  chainType: ChainType;
+  privateKey?: string;
+  rpcUrl?: string;
+}
 
-  constructor(config: SignerConfig) {
-    this.config = config;
+export class TransactionSigner {
+  private readonly noteManager: NoteManager;
+  private readonly viewKeyManager: ViewKeyManager;
+  private readonly chainType: ChainType;
+  private readonly privateKey?: string;
+  private readonly provider: ethers.providers.JsonRpcProvider | null;
+
+  constructor(
+    noteManager: NoteManager,
+    viewKeyManager: ViewKeyManager,
+    config: TransactionSignerConfig
+  ) {
+    this.noteManager = noteManager;
+    this.viewKeyManager = viewKeyManager;
+    this.chainType = config.chainType;
+    this.privateKey = config.privateKey;
     
-    if (config.chainType === 'ethereum') {
+    if (config.chainType === 'ethereum' && config.rpcUrl) {
       this.provider = new ethers.providers.JsonRpcProvider(config.rpcUrl);
-      this.solanaConnection = null;
     } else {
       this.provider = null;
-      // TODO: Initialize Solana connection
-      // this.solanaConnection = new Connection(config.rpcUrl);
     }
   }
 
   /**
-   * Signs a transaction for the specified chain
-   * @param tx The transaction to sign
-   * @returns The signed transaction
+   * Signs a transaction
+   * @param transactionData Transaction data to sign
+   * @returns Signed transaction
    */
-  async signTransaction(tx: EncryptedTx): Promise<SignedTransaction> {
+  async signTransaction(transactionData: any): Promise<string> {
+    if (!this.privateKey) {
+      throw new Error('Private key not provided for transaction signing');
+    }
+
     try {
-      if (this.config.chainType === 'ethereum') {
-        return await this.signEthereumTransaction(tx);
-      } else {
-        return await this.signSolanaTransaction(tx);
-      }
+      // Create transaction hash
+      const transactionHash = this.createTransactionHash(transactionData);
+      
+      // Sign the transaction
+      const wallet = new ethers.Wallet(this.privateKey);
+      const signature = await wallet.signMessage(ethers.utils.arrayify(transactionHash));
+      
+      return signature;
     } catch (error) {
-      if (error instanceof Error) {
-        throw new Error(`Failed to sign transaction: ${error.message}`);
-      }
-      throw new Error('Failed to sign transaction: Unknown error');
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      throw new Error(`Transaction signing failed: ${errorMessage}`);
+    }
+  }
+
+  /**
+   * Creates a hash of the transaction data
+   * @param transactionData Transaction data
+   * @returns Transaction hash
+   */
+  private createTransactionHash(transactionData: any): string {
+    const dataString = JSON.stringify(transactionData);
+    return ethers.utils.keccak256(ethers.utils.toUtf8Bytes(dataString));
+  }
+
+  /**
+   * Verifies a transaction signature
+   * @param transactionData Original transaction data
+   * @param signature Transaction signature
+   * @param publicKey Signer's public key
+   * @returns Whether the signature is valid
+   */
+  async verifySignature(
+    transactionData: any,
+    signature: string,
+    publicKey: string
+  ): Promise<boolean> {
+    try {
+      const transactionHash = this.createTransactionHash(transactionData);
+      const recoveredAddress = ethers.utils.verifyMessage(
+        ethers.utils.arrayify(transactionHash),
+        signature
+      );
+      
+      return recoveredAddress.toLowerCase() === publicKey.toLowerCase();
+    } catch (error) {
+      return false;
     }
   }
 
   /**
    * Signs an Ethereum transaction
-   * @param tx The transaction to sign
-   * @returns The signed transaction
+   * @param transactionData Transaction data
+   * @returns Signed transaction
    */
-  private async signEthereumTransaction(tx: EncryptedTx): Promise<SignedTransaction> {
-    if (!this.provider) {
-      throw new Error('Ethereum provider not initialized');
+  private async signEthereumTransaction(transactionData: any): Promise<SignedTransaction> {
+    if (!this.provider || !this.privateKey) {
+      throw new Error('Ethereum provider or private key not available');
     }
 
-    const wallet = new ethers.Wallet(this.config.privateKey, this.provider);
+    const wallet = new ethers.Wallet(this.privateKey, this.provider);
 
     // Create the transaction object
-    const transaction = {
-      to: tx.recipientAddress,
-      data: this.encodeEthereumTransactionData(tx),
-      value: 0, // Shielded transfers don't send ETH
-      gasLimit: tx.metadata?.gasLimit || '500000',
-      maxFeePerGas: tx.metadata?.maxFeePerGas,
-      maxPriorityFeePerGas: tx.metadata?.priorityFee
+    const tx = {
+      to: transactionData.recipientAddress,
+      value: ethers.utils.parseEther(transactionData.amount),
+      gasLimit: transactionData.metadata?.gasLimit || '21000',
+      maxFeePerGas: transactionData.metadata?.maxFeePerGas || ethers.utils.parseUnits('20', 'gwei'),
+      maxPriorityFeePerGas: transactionData.metadata?.priorityFee || ethers.utils.parseUnits('2', 'gwei'),
+      data: transactionData.proof || '0x'
     };
 
     // Sign the transaction
-    const signedTx = await wallet.signTransaction(transaction);
-    const txHash = ethers.utils.keccak256(signedTx);
+    const signedTx = await wallet.signTransaction(tx);
 
     return {
-      chainType: 'ethereum',
-      signedTx,
-      txHash
+      signature: signedTx,
+      transactionData,
+      chainType: 'ethereum'
     };
   }
 
   /**
-   * Signs a Solana transaction
-   * @param tx The transaction to sign
-   * @returns The signed transaction
-   */
-  private async signSolanaTransaction(tx: EncryptedTx): Promise<SignedTransaction> {
-    // TODO: Implement Solana transaction signing
-    throw new Error('Solana transaction signing not implemented');
-  }
-
-  /**
-   * Encodes transaction data for Ethereum
-   * @param tx The transaction to encode
-   * @returns The encoded transaction data
-   */
-  private encodeEthereumTransactionData(tx: EncryptedTx): string {
-    // TODO: Implement proper ABI encoding for the shielded transfer
-    // This should match the contract's function signature
-    const abiCoder = new ethers.utils.AbiCoder();
-    return abiCoder.encode(
-      ['bytes', 'bytes32[]', 'bytes'],
-      [tx.proof, tx.publicInputs, tx.encryptedNote]
-    );
-  }
-
-  /**
-   * Gets the transaction status
-   * @param txHash The transaction hash
-   * @returns The transaction status
+   * Gets transaction status
+   * @param txHash Transaction hash
+   * @returns Transaction status
    */
   async getTransactionStatus(txHash: string): Promise<{
     status: 'pending' | 'confirmed' | 'failed';
     blockNumber?: number;
-    error?: string;
+    gasUsed?: string;
   }> {
     try {
-      if (this.config.chainType === 'ethereum') {
-        return await this.getEthereumTransactionStatus(txHash);
+      if (this.chainType === 'ethereum' && this.provider) {
+        const receipt = await this.provider.getTransactionReceipt(txHash);
+        
+        if (!receipt) {
+          return { status: 'pending' };
+        }
+
+        return {
+          status: receipt.confirmations > 0 ? 'confirmed' : 'pending',
+          blockNumber: receipt.blockNumber,
+          gasUsed: receipt.gasUsed.toString()
+        };
       } else {
-        return await this.getSolanaTransactionStatus(txHash);
+        // For Solana, return pending status
+        return { status: 'pending' };
       }
     } catch (error) {
-      if (error instanceof Error) {
-        throw new Error(`Failed to get transaction status: ${error.message}`);
-      }
-      throw new Error('Failed to get transaction status: Unknown error');
+      return { status: 'failed' };
     }
-  }
-
-  /**
-   * Gets the status of an Ethereum transaction
-   * @param txHash The transaction hash
-   * @returns The transaction status
-   */
-  private async getEthereumTransactionStatus(txHash: string): Promise<{
-    status: 'pending' | 'confirmed' | 'failed';
-    blockNumber?: number;
-    error?: string;
-  }> {
-    if (!this.provider) {
-      throw new Error('Ethereum provider not initialized');
-    }
-
-    const receipt = await this.provider.getTransactionReceipt(txHash);
-    
-    if (!receipt) {
-      return { status: 'pending' };
-    }
-
-    if (receipt.status === 0) {
-      return {
-        status: 'failed',
-        blockNumber: receipt.blockNumber,
-        error: 'Transaction reverted'
-      };
-    }
-
-    return {
-      status: 'confirmed',
-      blockNumber: receipt.blockNumber
-    };
-  }
-
-  /**
-   * Gets the status of a Solana transaction
-   * @param txHash The transaction hash
-   * @returns The transaction status
-   */
-  private async getSolanaTransactionStatus(txHash: string): Promise<{
-    status: 'pending' | 'confirmed' | 'failed';
-    blockNumber?: number;
-    error?: string;
-  }> {
-    // TODO: Implement Solana transaction status check
-    throw new Error('Solana transaction status check not implemented');
   }
 } 

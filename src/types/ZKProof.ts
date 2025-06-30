@@ -55,6 +55,7 @@ export interface ZKProof {
         pi_b: string[][];
         pi_c: string[];
         protocol: string;
+        curve: string;
     };
     
     /**

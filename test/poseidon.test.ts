@@ -90,8 +90,8 @@ describe('Poseidon Hash Utilities', () => {
             expect(poseidonHashMany(inputs)).toBe(poseidonHashMany(inputs));
         });
 
-        it('should match poseidon-lite output', () => {
-            const inputs = [BigInt(123), BigInt(456), BigInt(789)];
+        it('should match poseidon-lite output for 2 inputs', () => {
+            const inputs = [BigInt(123), BigInt(456)];
             const expected = poseidon2(inputs);
             expect(poseidonHashMany(inputs)).toBe(expected);
         });

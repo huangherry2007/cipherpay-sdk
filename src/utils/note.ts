@@ -27,13 +27,35 @@ export function createNote(amount: string, recipient: string): ShieldedNote {
 }
 
 /**
+ * Serializes a note for JSON storage, converting BigInt to string
+ */
+function serializeNote(note: ShieldedNote): string {
+    const serializedNote = {
+        ...note,
+        amount: note.amount.toString()
+    };
+    return JSON.stringify(serializedNote);
+}
+
+/**
+ * Deserializes a note from JSON storage, converting string back to BigInt
+ */
+function deserializeNote(jsonString: string): ShieldedNote {
+    const parsed = JSON.parse(jsonString);
+    return {
+        ...parsed,
+        amount: BigInt(parsed.amount)
+    };
+}
+
+/**
  * Encrypts a shielded note using the provided key
  * @param note The note to encrypt
  * @param key The encryption key
  * @returns The encrypted note
  */
 export async function encryptNote(note: ShieldedNote, key: string): Promise<EncryptedNote> {
-    const { ciphertext, nonce } = await encryptData(JSON.stringify(note), key);
+    const { ciphertext, nonce } = await encryptData(serializeNote(note), key);
     return {
         ciphertext,
         ephemeralKey: key,
@@ -55,5 +77,5 @@ export async function encryptNote(note: ShieldedNote, key: string): Promise<Encr
  */
 export async function decryptNote(note: EncryptedNote, key: string): Promise<ShieldedNote> {
     const decrypted = await decryptData(note.ciphertext, key, note.nonce);
-    return JSON.parse(decrypted);
+    return deserializeNote(decrypted);
 } 

@@ -1,7 +1,7 @@
 import { ethers } from 'ethers';
 import { Connection, PublicKey } from '@solana/web3.js';
 import { ChainType } from '../core/WalletProvider';
-import { ShieldedNote } from '../core/NoteManager';
+import { ShieldedNote } from '../types/Note';
 import { ErrorHandler, ErrorType, ErrorContext } from '../errors/ErrorHandler';
 
 export interface EventConfig {
@@ -11,6 +11,7 @@ export interface EventConfig {
   programId?: string;        // For Solana
   startBlock?: number;       // For Ethereum
   startSlot?: number;        // For Solana
+  pollingInterval?: number;
 }
 
 export interface ShieldedTransferEvent {
@@ -37,6 +38,20 @@ export type ShieldedEvent = ShieldedTransferEvent | NoteSpentEvent;
 
 export type EventCallback = (event: ShieldedEvent) => void;
 
+export interface EventFilter {
+  fromBlock?: number;
+  toBlock?: number;
+  topics?: string[];
+}
+
+export interface EventData {
+  eventName: string;
+  blockNumber: number;
+  transactionHash: string;
+  logIndex: number;
+  data: any;
+}
+
 export class EventMonitor {
   private readonly config: EventConfig;
   private readonly provider: ethers.providers.JsonRpcProvider | null;
@@ -46,6 +61,7 @@ export class EventMonitor {
   private isMonitoring: boolean;
   private lastProcessedBlock: number;
   private lastProcessedSlot: number;
+  private pollingInterval: number;
 
   constructor(config: EventConfig) {
     this.config = config;
@@ -54,6 +70,7 @@ export class EventMonitor {
     this.lastProcessedBlock = config.startBlock || 0;
     this.lastProcessedSlot = config.startSlot || 0;
     this.errorHandler = new ErrorHandler();
+    this.pollingInterval = config.pollingInterval || 5000;
 
     if (config.chainType === 'ethereum') {
       this.provider = new ethers.providers.JsonRpcProvider(config.rpcUrl);
@@ -69,16 +86,11 @@ export class EventMonitor {
    */
   async startMonitoring(): Promise<void> {
     if (this.isMonitoring) {
-      return;
+      throw new Error('Event monitoring is already running');
     }
 
     this.isMonitoring = true;
-
-    if (this.config.chainType === 'ethereum') {
-      await this.monitorEthereumEvents();
-    } else {
-      await this.monitorSolanaEvents();
-    }
+    await this.monitorEvents();
   }
 
   /**
@@ -114,6 +126,26 @@ export class EventMonitor {
   }
 
   /**
+   * Monitors for events based on chain type
+   */
+  private async monitorEvents(): Promise<void> {
+    while (this.isMonitoring) {
+      try {
+        if (this.config.chainType === 'ethereum') {
+          await this.monitorEthereumEvents();
+        } else if (this.config.chainType === 'solana') {
+          await this.monitorSolanaEvents();
+        }
+
+        await new Promise(resolve => setTimeout(resolve, this.pollingInterval));
+      } catch (error) {
+        console.error('Error monitoring events:', error);
+        await new Promise(resolve => setTimeout(resolve, this.pollingInterval));
+      }
+    }
+  }
+
+  /**
    * Monitors Ethereum events
    */
   private async monitorEthereumEvents(): Promise<void> {
@@ -130,95 +162,25 @@ export class EventMonitor {
       this.provider
     );
 
-    while (this.isMonitoring) {
-      try {
-        const currentBlock = await this.provider.getBlockNumber();
-        
-        if (currentBlock > this.lastProcessedBlock) {
-          // Get events from the last processed block to the current block
-          const transferEvents = await contract.queryFilter(
-            contract.filters.ShieldedTransfer(),
-            this.lastProcessedBlock,
-            currentBlock
-          );
+    const currentBlock = await this.provider.getBlockNumber();
+    
+    if (currentBlock > this.lastProcessedBlock) {
+      const fromBlock = this.lastProcessedBlock + 1;
+      const toBlock = Math.min(currentBlock, fromBlock + 100); // Process in chunks
 
-          const spentEvents = await contract.queryFilter(
-            contract.filters.NoteSpent(),
-            this.lastProcessedBlock,
-            currentBlock
-          );
+      const filter: ethers.providers.Filter = {
+        fromBlock,
+        toBlock,
+        address: this.config.contractAddress
+      };
 
-          // Process transfer events
-          for (const event of transferEvents) {
-            try {
-              const args = (event.args as unknown) as {
-                from: string;
-                to: string;
-                amount: ethers.BigNumber;
-                commitment: string;
-                nullifier: string;
-              };
-              const transferEvent: ShieldedTransferEvent = {
-                type: 'shielded_transfer',
-                from: args.from,
-                to: args.to,
-                amount: args.amount.toString(),
-                commitment: args.commitment,
-                nullifier: args.nullifier,
-                timestamp: (await event.getBlock()).timestamp,
-                blockNumber: event.blockNumber
-              };
-
-              this.emit('shielded_transfer', transferEvent);
-            } catch (error) {
-              await this.errorHandler.handleError(error as Error, {
-                chainType: 'ethereum',
-                operation: 'process_transfer_event',
-                details: { event },
-                timestamp: Date.now()
-              });
-            }
-          }
-
-          // Process spent events
-          for (const event of spentEvents) {
-            try {
-              const args = (event.args as unknown) as {
-                nullifier: string;
-              };
-              const spentEvent: NoteSpentEvent = {
-                type: 'note_spent',
-                nullifier: args.nullifier,
-                timestamp: (await event.getBlock()).timestamp,
-                blockNumber: event.blockNumber
-              };
-
-              this.emit('note_spent', spentEvent);
-            } catch (error) {
-              await this.errorHandler.handleError(error as Error, {
-                chainType: 'ethereum',
-                operation: 'process_spent_event',
-                details: { event },
-                timestamp: Date.now()
-              });
-            }
-          }
-
-          this.lastProcessedBlock = currentBlock;
-        }
-
-        // Wait for new blocks
-        await new Promise(resolve => setTimeout(resolve, 1000));
-      } catch (error) {
-        await this.errorHandler.handleError(error as Error, {
-          chainType: 'ethereum',
-          operation: 'monitor_ethereum_events',
-          details: { lastProcessedBlock: this.lastProcessedBlock },
-          timestamp: Date.now()
-        });
-        // Wait before retrying
-        await new Promise(resolve => setTimeout(resolve, 5000));
+      const logs = await this.provider.getLogs(filter);
+      
+      for (const log of logs) {
+        await this.processEthereumEvent(log);
       }
+
+      this.lastProcessedBlock = toBlock;
     }
   }
 
@@ -232,54 +194,89 @@ export class EventMonitor {
 
     const programId = new PublicKey(this.config.programId);
 
-    while (this.isMonitoring) {
-      try {
-        const currentSlot = await this.solanaConnection.getSlot();
-        
-        if (currentSlot > this.lastProcessedSlot) {
-          // TODO: Implement Solana event monitoring
-          // This would involve:
-          // 1. Getting program logs for the relevant slots
-          // 2. Parsing the logs to extract events
-          // 3. Converting the events to our ShieldedEvent format
-          // 4. Emitting the events
+    const currentSlot = await this.solanaConnection.getSlot();
+    
+    if (currentSlot > this.lastProcessedSlot) {
+      // TODO: Implement Solana event monitoring
+      // This would involve:
+      // 1. Getting program logs for the relevant slots
+      // 2. Parsing the logs to extract events
+      // 3. Converting the events to our ShieldedEvent format
+      // 4. Emitting the events
 
-          this.lastProcessedSlot = currentSlot;
-        }
-
-        // Wait for new slots
-        await new Promise(resolve => setTimeout(resolve, 1000));
-      } catch (error) {
-        await this.errorHandler.handleError(error as Error, {
-          chainType: 'solana',
-          operation: 'monitor_solana_events',
-          details: { lastProcessedSlot: this.lastProcessedSlot },
-          timestamp: Date.now()
-        });
-        // Wait before retrying
-        await new Promise(resolve => setTimeout(resolve, 5000));
-      }
+      this.lastProcessedSlot = currentSlot;
     }
   }
 
   /**
-   * Emits an event to all registered callbacks
-   * @param eventType The type of event
-   * @param event The event data
+   * Processes an Ethereum event
    */
-  private emit(eventType: ShieldedEvent['type'], event: ShieldedEvent): void {
-    const callbacks = this.callbacks.get(eventType) || [];
-    for (const callback of callbacks) {
-      try {
-        callback(event);
-      } catch (error) {
-        this.errorHandler.handleError(error as Error, {
-          chainType: this.config.chainType,
-          operation: 'event_callback',
-          details: { eventType, event },
-          timestamp: Date.now()
-        });
-      }
+  private async processEthereumEvent(log: ethers.providers.Log): Promise<void> {
+    const eventData: EventData = {
+      eventName: 'Unknown',
+      blockNumber: log.blockNumber,
+      transactionHash: log.transactionHash,
+      logIndex: log.logIndex,
+      data: log.data
+    };
+
+    // Emit the event
+    this.emitGeneric('event', eventData);
+  }
+
+  /**
+   * Processes a Solana event
+   */
+  private async processSolanaEvent(signature: any): Promise<void> {
+    const eventData: EventData = {
+      eventName: 'SolanaTransaction',
+      blockNumber: 0, // Solana doesn't have block numbers in the same way
+      transactionHash: signature.signature,
+      logIndex: 0,
+      data: signature
+    };
+
+    // Emit the event
+    this.emitGeneric('event', eventData);
+  }
+
+  /**
+   * Emits an event (placeholder for event emitter)
+   */
+  private emit(event: 'shielded_transfer' | 'note_spent' | 'event', data: any): void {
+    // In a real implementation, this would use an event emitter
+    console.log(`Event: ${event}`, data);
+  }
+
+  /**
+   * Emits a generic event
+   */
+  private emitGeneric(event: string, data: any): void {
+    // In a real implementation, this would use an event emitter
+    console.log(`Event: ${event}`, data);
+  }
+
+  /**
+   * Gets events for a specific filter
+   */
+  async getEvents(filter: EventFilter): Promise<EventData[]> {
+    if (this.config.chainType === 'ethereum' && this.provider && this.config.contractAddress) {
+      const logs = await this.provider.getLogs({
+        fromBlock: filter.fromBlock || 0,
+        toBlock: filter.toBlock || 'latest',
+        address: this.config.contractAddress,
+        topics: filter.topics
+      });
+
+      return logs.map(log => ({
+        eventName: 'Unknown',
+        blockNumber: log.blockNumber,
+        transactionHash: log.transactionHash,
+        logIndex: log.logIndex,
+        data: log.data
+      }));
     }
+
+    return [];
   }
 } 
