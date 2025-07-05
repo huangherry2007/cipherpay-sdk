@@ -1,15 +1,16 @@
-import { NoteManager } from '../src/core/NoteManager';
-import { ShieldedNote, NoteType } from '../src/types/Note';
-import { Logger } from '../src/utils/logger';
+import { NoteManager, ShieldedNote } from '../src/core/NoteManager';
+import { ViewKeyManager } from '../src/core/ViewKeyManager';
+import { Logger } from '../src/monitoring/observability/logger';
+import { NoteType } from '../src/types/Note';
 
 // Mock the logger
-jest.mock('../src/utils/logger', () => ({
+jest.mock('../src/monitoring/observability/logger', () => ({
     Logger: {
         getInstance: jest.fn().mockReturnValue({
             info: jest.fn(),
+            warn: jest.fn(),
             error: jest.fn(),
-            debug: jest.fn(),
-            warn: jest.fn()
+            debug: jest.fn()
         })
     }
 }));

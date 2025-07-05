@@ -2,6 +2,8 @@ import { Note, NoteStatus, NoteType, ShieldedNote } from '../types/Note';
 import { encryptNote, decryptNote, generateCommitment, generateNullifier } from '../utils/encryption';
 import { hash } from '../utils/hash';
 import * as nacl from 'tweetnacl';
+import { ErrorHandler, ErrorType, CipherPayError } from '../errors/ErrorHandler';
+import { globalRateLimiter } from '../utils/RateLimiter';
 
 // Export types for backward compatibility
 export { ShieldedNote, Note, NoteStatus, NoteType };
@@ -70,6 +72,14 @@ export class NoteManager {
     type: NoteType = 'transfer',
     metadata?: Record<string, any>
   ): Promise<ExtendedNote> {
+    // Apply rate limiting for note creation
+    globalRateLimiter.consume('NOTE_ENCRYPTION', {
+      operation: 'create',
+      noteType: type,
+      amount: amount.toString(),
+      hasMetadata: !!metadata
+    });
+
     try {
       // Generate note components
       const commitment = await generateCommitment(amount, recipientAddress);
@@ -108,7 +118,21 @@ export class NoteManager {
       return note;
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      throw new Error(`Failed to create note: ${errorMessage}`);
+      const cipherPayError = new CipherPayError(
+        `Failed to create note: ${errorMessage}`,
+        ErrorType.NOTE_NOT_FOUND,
+        { 
+          amount: amount.toString(),
+          recipientAddress,
+          type
+        },
+        {
+          action: 'Check inputs and retry',
+          description: 'Failed to create note. Please verify inputs and try again.'
+        },
+        true
+      );
+      throw ErrorHandler.getInstance().handleError(cipherPayError);
     }
   }
 
@@ -116,6 +140,12 @@ export class NoteManager {
    * Decrypts and retrieves a note
    */
   async getNote(noteId: string): Promise<ExtendedNote | null> {
+    // Apply rate limiting for note decryption
+    globalRateLimiter.consume('NOTE_ENCRYPTION', {
+      operation: 'decrypt',
+      noteId
+    });
+
     const note = this.notes.get(noteId);
     if (!note) {
       return null;
@@ -131,7 +161,17 @@ export class NoteManager {
       return note;
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      throw new Error(`Failed to decrypt note: ${errorMessage}`);
+      const cipherPayError = new CipherPayError(
+        `Failed to decrypt note: ${errorMessage}`,
+        ErrorType.DECRYPTION_ERROR,
+        { noteId },
+        {
+          action: 'Check encryption key',
+          description: 'Failed to decrypt note. Please verify the encryption key is correct.'
+        },
+        true
+      );
+      throw ErrorHandler.getInstance().handleError(cipherPayError);
     }
   }
 
@@ -375,28 +415,41 @@ export class NoteManager {
    */
   async importNotes(jsonData: string, password?: string): Promise<number> {
     try {
-      const parsed = JSON.parse(jsonData);
-      let notesData: ExtendedNote[];
-
-      if (parsed.encrypted && password) {
-        // Decrypt the export
-        const passwordKey = await this.deriveKeyFromPassword(password);
-        const encryptedData = new Uint8Array(parsed.data);
-        const decryptedData = await this.decryptData(encryptedData, passwordKey);
-        notesData = JSON.parse(decryptedData);
+      let data: any;
+      
+      if (password) {
+        // Decrypt the JSON data first
+        const key = await this.deriveKeyFromPassword(password);
+        const decryptedData = await this.decryptData(new TextEncoder().encode(jsonData), key);
+        data = JSON.parse(decryptedData);
       } else {
-        notesData = parsed;
+        data = JSON.parse(jsonData);
+      }
+
+      if (!Array.isArray(data.notes)) {
+        throw new CipherPayError(
+          'Invalid notes data format',
+          ErrorType.INVALID_NOTE_FORMAT,
+          { dataType: typeof data.notes },
+          {
+            action: 'Check data format',
+            description: 'Invalid notes data format. Expected an array of notes.'
+          },
+          false
+        );
       }
 
       let importedCount = 0;
-      for (const noteData of notesData) {
-        // Validate note data
+      for (const noteData of data.notes) {
         if (this.isValidNote(noteData)) {
           const note: ExtendedNote = {
             ...noteData,
             createdAt: new Date(noteData.createdAt),
             updatedAt: new Date(noteData.updatedAt)
           };
+          
+          // Generate new ID to avoid conflicts
+          note.id = this.generateNoteId();
           
           this.notes.set(note.id, note);
           importedCount++;
@@ -410,7 +463,17 @@ export class NoteManager {
       return importedCount;
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      throw new Error(`Failed to import notes: ${errorMessage}`);
+      const cipherPayError = new CipherPayError(
+        `Failed to import notes: ${errorMessage}`,
+        ErrorType.INVALID_NOTE_FORMAT,
+        { notesCount: jsonData.length },
+        {
+          action: 'Check data format and password',
+          description: 'Failed to import notes. Please verify the data format and password if provided.'
+        },
+        true
+      );
+      throw ErrorHandler.getInstance().handleError(cipherPayError);
     }
   }
 

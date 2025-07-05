@@ -1,4 +1,4 @@
-import { Logger } from '../src/utils/logger';
+import { Logger } from '../src/monitoring/observability/logger';
 
 describe('Logger', () => {
     let logger: Logger;

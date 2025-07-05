@@ -1,6 +1,6 @@
 import { ethers } from 'ethers';
 import { ShieldedNote } from '../types/Note';
-import { Logger } from '../utils/logger';
+import { Logger } from '../monitoring/observability/logger';
 
 export interface ComplianceRule {
   id: string;

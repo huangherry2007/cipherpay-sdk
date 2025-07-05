@@ -3,6 +3,8 @@ import { PublicKey, Transaction } from '@solana/web3.js';
 import { ChainType } from '../core/WalletProvider';
 import { NoteManager } from '../core/NoteManager';
 import { ViewKeyManager } from '../core/ViewKeyManager';
+import { ErrorHandler, ErrorType, CipherPayError } from '../errors/ErrorHandler';
+import { globalRateLimiter } from '../utils/RateLimiter';
 
 export interface SignedTransaction {
   signature: string;
@@ -52,8 +54,24 @@ export class TransactionSigner {
    * @returns Signed transaction
    */
   async signTransaction(transactionData: any): Promise<string> {
+    // Apply rate limiting
+    globalRateLimiter.consume('TRANSACTION_SIGNING', {
+      chainType: this.chainType,
+      hasPrivateKey: !!this.privateKey,
+      transactionType: transactionData.type || 'unknown'
+    });
+
     if (!this.privateKey) {
-      throw new Error('Private key not provided for transaction signing');
+      throw new CipherPayError(
+        'Private key not provided for transaction signing',
+        ErrorType.INVALID_PRIVATE_KEY,
+        { chainType: this.chainType },
+        {
+          action: 'Provide private key',
+          description: 'Private key is required for transaction signing. Please provide a valid private key.'
+        },
+        false
+      );
     }
 
     try {
@@ -67,7 +85,20 @@ export class TransactionSigner {
       return signature;
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      throw new Error(`Transaction signing failed: ${errorMessage}`);
+      const cipherPayError = new CipherPayError(
+        `Transaction signing failed: ${errorMessage}`,
+        ErrorType.TRANSACTION_FAILED,
+        { 
+          chainType: this.chainType,
+          hasPrivateKey: !!this.privateKey
+        },
+        {
+          action: 'Check private key and retry',
+          description: 'Transaction signing failed. Please verify your private key is correct and try again.'
+        },
+        true
+      );
+      throw ErrorHandler.getInstance().handleError(cipherPayError);
     }
   }
 
@@ -112,8 +143,29 @@ export class TransactionSigner {
    * @returns Signed transaction
    */
   private async signEthereumTransaction(transactionData: any): Promise<SignedTransaction> {
+    // Apply rate limiting for Ethereum-specific operations
+    globalRateLimiter.consume('TRANSACTION_SIGNING', {
+      chainType: 'ethereum',
+      operation: 'ethereum_sign',
+      hasProvider: !!this.provider,
+      hasPrivateKey: !!this.privateKey
+    });
+
     if (!this.provider || !this.privateKey) {
-      throw new Error('Ethereum provider or private key not available');
+      throw new CipherPayError(
+        'Ethereum provider or private key not available',
+        ErrorType.WALLET_CONNECTION_FAILED,
+        { 
+          chainType: this.chainType,
+          hasProvider: !!this.provider,
+          hasPrivateKey: !!this.privateKey
+        },
+        {
+          action: 'Configure provider and private key',
+          description: 'Ethereum provider or private key not available. Please configure both provider and private key.'
+        },
+        false
+      );
     }
 
     const wallet = new ethers.Wallet(this.privateKey, this.provider);

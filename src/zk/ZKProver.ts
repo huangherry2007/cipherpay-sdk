@@ -2,6 +2,8 @@ import * as snarkjs from 'snarkjs';
 import * as fs from 'fs';
 import * as path from 'path';
 import { ZKProof, ZKInput, ProofInput, TransferProofInput, WithdrawProofInput, ReshieldProofInput } from '../types/ZKProof';
+import { ErrorHandler, ErrorType, CipherPayError } from '../errors/ErrorHandler';
+import { globalRateLimiter } from '../utils/RateLimiter';
 
 export interface CircuitConfig {
   wasmPath: string;
@@ -59,10 +61,26 @@ export class ZKProver {
    * @returns Promise<ZKProof> The generated proof
    */
   async generateTransferProof(input: TransferProofInput): Promise<ZKProof> {
+    // Apply rate limiting
+    globalRateLimiter.consume('PROOF_GENERATION', {
+      proofType: 'transfer',
+      inputNotesCount: input.inputNotes.length,
+      userId: input.viewKey ? 'authenticated' : 'anonymous'
+    });
+
     try {
       const config = this.circuitConfigs.get('transfer');
       if (!config) {
-        throw new Error('Transfer circuit files not found');
+        throw new CipherPayError(
+          'Transfer circuit files not found',
+          ErrorType.MISSING_DEPENDENCY,
+          { circuitType: 'transfer', circuitPath: this.circuitPath },
+          {
+            action: 'Install circuit files',
+            description: 'Transfer circuit files are missing. Please ensure the circuit files are properly installed.'
+          },
+          false
+        );
       }
 
       // Prepare witness inputs for the circuit
@@ -82,7 +100,22 @@ export class ZKProver {
       };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      throw new Error(`Failed to generate transfer proof: ${errorMessage}`);
+      const cipherPayError = new CipherPayError(
+        `Failed to generate transfer proof: ${errorMessage}`,
+        ErrorType.PROOF_GENERATION_FAILED,
+        { 
+          circuitType: 'transfer',
+          inputNotes: input.inputNotes.length,
+          outputNote: 'present'
+        },
+        {
+          action: 'Check circuit files and inputs',
+          description: 'Failed to generate transfer proof. Please verify circuit files are available and inputs are valid.'
+        },
+        true
+      );
+      
+      throw ErrorHandler.getInstance().handleError(cipherPayError);
     }
   }
 
@@ -92,10 +125,26 @@ export class ZKProver {
    * @returns Promise<ZKProof> The generated proof
    */
   async generateWithdrawProof(input: WithdrawProofInput): Promise<ZKProof> {
+    // Apply rate limiting
+    globalRateLimiter.consume('PROOF_GENERATION', {
+      proofType: 'withdraw',
+      inputNotesCount: input.inputNotes.length,
+      userId: input.viewKey ? 'authenticated' : 'anonymous'
+    });
+
     try {
       const config = this.circuitConfigs.get('withdraw');
       if (!config) {
-        throw new Error('Withdraw circuit files not found');
+        throw new CipherPayError(
+          'Withdraw circuit files not found',
+          ErrorType.MISSING_DEPENDENCY,
+          { circuitType: 'withdraw', circuitPath: this.circuitPath },
+          {
+            action: 'Install circuit files',
+            description: 'Withdraw circuit files are missing. Please ensure the circuit files are properly installed.'
+          },
+          false
+        );
       }
 
       // Prepare witness inputs for the circuit
@@ -115,7 +164,22 @@ export class ZKProver {
       };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      throw new Error(`Failed to generate withdraw proof: ${errorMessage}`);
+      const cipherPayError = new CipherPayError(
+        `Failed to generate withdraw proof: ${errorMessage}`,
+        ErrorType.PROOF_GENERATION_FAILED,
+        { 
+          circuitType: 'withdraw',
+          inputNotes: input.inputNotes.length,
+          recipientAddress: input.recipientAddress
+        },
+        {
+          action: 'Check circuit files and inputs',
+          description: 'Failed to generate withdraw proof. Please verify circuit files are available and inputs are valid.'
+        },
+        true
+      );
+      
+      throw ErrorHandler.getInstance().handleError(cipherPayError);
     }
   }
 
@@ -125,10 +189,26 @@ export class ZKProver {
    * @returns Promise<ZKProof> The generated proof
    */
   async generateReshieldProof(input: ReshieldProofInput): Promise<ZKProof> {
+    // Apply rate limiting
+    globalRateLimiter.consume('PROOF_GENERATION', {
+      proofType: 'reshield',
+      inputNotesCount: input.inputNotes.length,
+      userId: input.viewKey ? 'authenticated' : 'anonymous'
+    });
+
     try {
       const config = this.circuitConfigs.get('transfer'); // Reshield uses transfer circuit
       if (!config) {
-        throw new Error('Transfer circuit files not found');
+        throw new CipherPayError(
+          'Transfer circuit files not found',
+          ErrorType.MISSING_DEPENDENCY,
+          { circuitType: 'transfer', circuitPath: this.circuitPath },
+          {
+            action: 'Install circuit files',
+            description: 'Transfer circuit files are missing. Please ensure the circuit files are properly installed.'
+          },
+          false
+        );
       }
 
       // Prepare witness inputs for the circuit
@@ -148,7 +228,22 @@ export class ZKProver {
       };
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      throw new Error(`Failed to generate reshield proof: ${errorMessage}`);
+      const cipherPayError = new CipherPayError(
+        `Failed to generate reshield proof: ${errorMessage}`,
+        ErrorType.PROOF_GENERATION_FAILED,
+        { 
+          circuitType: 'transfer',
+          inputNotes: input.inputNotes.length,
+          amount: input.amount.toString()
+        },
+        {
+          action: 'Check circuit files and inputs',
+          description: 'Failed to generate reshield proof. Please verify circuit files are available and inputs are valid.'
+        },
+        true
+      );
+      
+      throw ErrorHandler.getInstance().handleError(cipherPayError);
     }
   }
 
@@ -160,10 +255,26 @@ export class ZKProver {
    * @returns Promise<boolean> Whether the proof is valid
    */
   async verifyProof(proof: ZKProof, publicInputs: string[], circuitType: string = 'transfer'): Promise<boolean> {
+    // Apply rate limiting for proof verification
+    globalRateLimiter.consume('PROOF_GENERATION', {
+      operation: 'verify',
+      circuitType,
+      publicInputsCount: publicInputs.length
+    });
+
     try {
       const config = this.circuitConfigs.get(circuitType);
       if (!config) {
-        throw new Error(`${circuitType} circuit files not found`);
+        throw new CipherPayError(
+          `${circuitType} circuit files not found`,
+          ErrorType.MISSING_DEPENDENCY,
+          { circuitType, circuitPath: this.circuitPath },
+          {
+            action: 'Install circuit files',
+            description: `${circuitType} circuit files are missing. Please ensure the circuit files are properly installed.`
+          },
+          false
+        );
       }
 
       // Load verification key
@@ -181,7 +292,22 @@ export class ZKProver {
       return isValid;
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      throw new Error(`Failed to verify proof: ${errorMessage}`);
+      const cipherPayError = new CipherPayError(
+        `Failed to verify proof: ${errorMessage}`,
+        ErrorType.PROOF_VERIFICATION_FAILED,
+        { 
+          circuitType,
+          publicInputsCount: publicInputs.length,
+          proofTimestamp: proof.timestamp
+        },
+        {
+          action: 'Check proof and circuit files',
+          description: 'Failed to verify proof. Please verify the proof is valid and circuit files are available.'
+        },
+        true
+      );
+      
+      throw ErrorHandler.getInstance().handleError(cipherPayError);
     }
   }
 

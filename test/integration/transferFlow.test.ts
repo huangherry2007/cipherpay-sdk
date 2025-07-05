@@ -1,13 +1,16 @@
-import { WalletProvider } from '../../src/core/WalletProvider';
+import { CipherPaySDK } from '../../src/core/CipherPaySDK';
 import { NoteManager } from '../../src/core/NoteManager';
-import { ZKProver } from '../../src/zk/ZKProver';
+import { ViewKeyManager } from '../../src/core/ViewKeyManager';
 import { TransferBuilder } from '../../src/tx/TransferBuilder';
 import { ShieldedNote } from '../../src/types/Note';
+import { ZKProof } from '../../src/types/ZKProof';
+import { Logger } from '../../src/monitoring/observability/logger';
+import { WalletProvider } from '../../src/core/WalletProvider';
+import { ZKProver } from '../../src/zk/ZKProver';
 import { ZKInput } from '../../src/types/ZKProof';
-import { Logger } from '../../src/utils/logger';
 
 // Mock the logger
-jest.mock('../../src/utils/logger', () => ({
+jest.mock('../../src/monitoring/observability/logger', () => ({
     Logger: {
         getInstance: jest.fn().mockReturnValue({
             info: jest.fn(),

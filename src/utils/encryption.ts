@@ -1,5 +1,6 @@
 import { utils } from 'ethers';
 import { EncryptedNote, NoteMetadata } from '../types/Note';
+import { ErrorHandler, ErrorType, CipherPayError } from '../errors/ErrorHandler';
 
 /**
  * Generates a commitment for a note
@@ -119,7 +120,19 @@ export async function encryptNote(
 ): Promise<EncryptedNote> {
   // Validate public key format - should be a valid hex string
   if (!recipientPubKey || !/^0x[a-fA-F0-9]+$/.test(recipientPubKey) || recipientPubKey.length < 66) {
-    throw new Error('Invalid public key format');
+    throw new CipherPayError(
+      'Invalid public key format',
+      ErrorType.INVALID_INPUT,
+      { 
+        publicKeyLength: recipientPubKey?.length || 0,
+        publicKeyFormat: recipientPubKey?.substring(0, 10) + '...'
+      },
+      {
+        action: 'Provide valid public key',
+        description: 'Public key must be a valid hex string starting with 0x and at least 66 characters long.'
+      },
+      false
+    );
   }
   
   // Generate a random encryption key
@@ -160,7 +173,19 @@ export async function decryptNote(
 ): Promise<string> {
   // Validate private key format - should be a valid hex string
   if (!privateKey || !/^0x[a-fA-F0-9]+$/.test(privateKey) || privateKey.length < 66) {
-    throw new Error('Invalid private key format');
+    throw new CipherPayError(
+      'Invalid private key format',
+      ErrorType.INVALID_PRIVATE_KEY,
+      { 
+        privateKeyLength: privateKey?.length || 0,
+        privateKeyFormat: privateKey?.substring(0, 10) + '...'
+      },
+      {
+        action: 'Provide valid private key',
+        description: 'Private key must be a valid hex string starting with 0x and at least 66 characters long.'
+      },
+      false
+    );
   }
   
   // For now, we'll use a simplified approach

@@ -4,6 +4,7 @@ import { ZKProof } from '../types/ZKProof';
 import { RelayerClient } from '../relayer/RelayerClient';
 import { WalletProvider } from '../core/WalletProvider';
 import { ZKProver } from '../zk/ZKProver';
+import { ErrorHandler, ErrorType, CipherPayError } from '../errors/ErrorHandler';
 
 export interface TransactionConfig {
   feePayer?: PublicKey;
@@ -108,7 +109,23 @@ export class TransactionBuilder {
       return result;
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      throw new Error(`Transfer transaction failed: ${errorMessage}`);
+      const cipherPayError = new CipherPayError(
+        `Transfer transaction failed: ${errorMessage}`,
+        ErrorType.TRANSACTION_FAILED,
+        { 
+          transactionType: 'transfer',
+          fromNotes: request.fromNotes.length,
+          toAddress: request.toAddress,
+          amount: request.amount.toString()
+        },
+        {
+          action: 'Check inputs and retry',
+          description: 'Transfer transaction failed. Please verify inputs and try again.'
+        },
+        true
+      );
+      
+      throw ErrorHandler.getInstance().handleError(cipherPayError);
     }
   }
 
@@ -148,7 +165,23 @@ export class TransactionBuilder {
       return result;
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      throw new Error(`Withdraw transaction failed: ${errorMessage}`);
+      const cipherPayError = new CipherPayError(
+        `Withdraw transaction failed: ${errorMessage}`,
+        ErrorType.TRANSACTION_FAILED,
+        { 
+          transactionType: 'withdraw',
+          fromNotes: request.fromNotes.length,
+          toAddress: request.toAddress,
+          amount: request.amount.toString()
+        },
+        {
+          action: 'Check inputs and retry',
+          description: 'Withdraw transaction failed. Please verify inputs and try again.'
+        },
+        true
+      );
+      
+      throw ErrorHandler.getInstance().handleError(cipherPayError);
     }
   }
 
@@ -186,7 +219,22 @@ export class TransactionBuilder {
       return result;
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      throw new Error(`Reshield transaction failed: ${errorMessage}`);
+      const cipherPayError = new CipherPayError(
+        `Reshield transaction failed: ${errorMessage}`,
+        ErrorType.TRANSACTION_FAILED,
+        { 
+          transactionType: 'reshield',
+          fromNotes: request.fromNotes.length,
+          amount: request.amount.toString()
+        },
+        {
+          action: 'Check inputs and retry',
+          description: 'Reshield transaction failed. Please verify inputs and try again.'
+        },
+        true
+      );
+      
+      throw ErrorHandler.getInstance().handleError(cipherPayError);
     }
   }
 
@@ -235,26 +283,76 @@ export class TransactionBuilder {
    */
   private validateTransferRequest(request: TransferRequest): void {
     if (!request.fromNotes || request.fromNotes.length === 0) {
-      throw new Error('At least one input note is required');
+      throw new CipherPayError(
+        'At least one input note is required',
+        ErrorType.INVALID_INPUT,
+        { field: 'fromNotes', count: request.fromNotes?.length || 0 },
+        {
+          action: 'Provide input notes',
+          description: 'Transfer requires at least one input note to spend from.'
+        },
+        false
+      );
     }
 
     if (!request.toAddress) {
-      throw new Error('Recipient address is required');
+      throw new CipherPayError(
+        'Recipient address is required',
+        ErrorType.INVALID_ADDRESS,
+        { field: 'toAddress' },
+        {
+          action: 'Provide recipient address',
+          description: 'Transfer requires a valid recipient address.'
+        },
+        false
+      );
     }
 
-    if (request.amount <= BigInt(0)) {
-      throw new Error('Amount must be greater than 0');
+    if (request.amount <= 0n) {
+      throw new CipherPayError(
+        'Amount must be greater than 0',
+        ErrorType.INVALID_AMOUNT,
+        { amount: request.amount.toString() },
+        {
+          action: 'Provide valid amount',
+          description: 'Transfer amount must be greater than zero.'
+        },
+        false
+      );
     }
 
-    const totalInputAmount = request.fromNotes.reduce((sum, note) => sum + note.amount, BigInt(0));
+    // Check if we have sufficient funds
+    const totalInputAmount = request.fromNotes.reduce((sum, note) => sum + note.amount, 0n);
     if (totalInputAmount < request.amount) {
-      throw new Error('Insufficient funds in input notes');
+      throw new CipherPayError(
+        'Insufficient funds in input notes',
+        ErrorType.INSUFFICIENT_FUNDS,
+        { 
+          required: request.amount.toString(),
+          available: totalInputAmount.toString(),
+          inputNotes: request.fromNotes.length
+        },
+        {
+          action: 'Add more input notes',
+          description: 'Insufficient funds in selected input notes. Please add more notes or reduce the transfer amount.'
+        },
+        false
+      );
     }
 
-    // Validate note ownership
+    // Check if any notes are already spent
     for (const note of request.fromNotes) {
       if (note.spent) {
-        throw new Error(`Note ${note.commitment} is already spent`);
+        throw new CipherPayError(
+          `Note ${note.commitment} is already spent`,
+          ErrorType.NOTE_ALREADY_SPENT,
+          { noteCommitment: note.commitment },
+          {
+            action: 'Select different notes',
+            description: 'One or more input notes have already been spent. Please select different notes.'
+          },
+          false
+        );
       }
     }
   }
@@ -264,20 +362,61 @@ export class TransactionBuilder {
    */
   private validateWithdrawRequest(request: WithdrawRequest): void {
     if (!request.fromNotes || request.fromNotes.length === 0) {
-      throw new Error('At least one input note is required');
+      throw new CipherPayError(
+        'At least one input note is required',
+        ErrorType.INVALID_INPUT,
+        { field: 'fromNotes', count: request.fromNotes?.length || 0 },
+        {
+          action: 'Provide input notes',
+          description: 'Withdraw requires at least one input note to spend from.'
+        },
+        false
+      );
     }
 
     if (!request.toAddress) {
-      throw new Error('Recipient address is required');
+      throw new CipherPayError(
+        'Recipient address is required',
+        ErrorType.INVALID_ADDRESS,
+        { field: 'toAddress' },
+        {
+          action: 'Provide recipient address',
+          description: 'Withdraw requires a valid recipient address.'
+        },
+        false
+      );
     }
 
-    if (request.amount <= BigInt(0)) {
-      throw new Error('Amount must be greater than 0');
+    if (request.amount <= 0n) {
+      throw new CipherPayError(
+        'Amount must be greater than 0',
+        ErrorType.INVALID_AMOUNT,
+        { amount: request.amount.toString() },
+        {
+          action: 'Provide valid amount',
+          description: 'Withdraw amount must be greater than zero.'
+        },
+        false
+      );
     }
 
-    const totalInputAmount = request.fromNotes.reduce((sum, note) => sum + note.amount, BigInt(0));
+    // Check if we have sufficient funds
+    const totalInputAmount = request.fromNotes.reduce((sum, note) => sum + note.amount, 0n);
     if (totalInputAmount < request.amount) {
-      throw new Error('Insufficient funds in input notes');
+      throw new CipherPayError(
+        'Insufficient funds in input notes',
+        ErrorType.INSUFFICIENT_FUNDS,
+        { 
+          required: request.amount.toString(),
+          available: totalInputAmount.toString(),
+          inputNotes: request.fromNotes.length
+        },
+        {
+          action: 'Add more input notes',
+          description: 'Insufficient funds in selected input notes. Please add more notes or reduce the withdraw amount.'
+        },
+        false
+      );
     }
   }
 
@@ -286,16 +425,48 @@ export class TransactionBuilder {
    */
   private validateReshieldRequest(request: ReshieldRequest): void {
     if (!request.fromNotes || request.fromNotes.length === 0) {
-      throw new Error('At least one input note is required');
+      throw new CipherPayError(
+        'At least one input note is required',
+        ErrorType.INVALID_INPUT,
+        { field: 'fromNotes', count: request.fromNotes?.length || 0 },
+        {
+          action: 'Provide input notes',
+          description: 'Reshield requires at least one input note to spend from.'
+        },
+        false
+      );
     }
 
-    if (request.amount <= BigInt(0)) {
-      throw new Error('Amount must be greater than 0');
+    if (request.amount <= 0n) {
+      throw new CipherPayError(
+        'Amount must be greater than 0',
+        ErrorType.INVALID_AMOUNT,
+        { amount: request.amount.toString() },
+        {
+          action: 'Provide valid amount',
+          description: 'Reshield amount must be greater than zero.'
+        },
+        false
+      );
     }
 
-    const totalInputAmount = request.fromNotes.reduce((sum, note) => sum + note.amount, BigInt(0));
+    // Check if we have sufficient funds
+    const totalInputAmount = request.fromNotes.reduce((sum, note) => sum + note.amount, 0n);
     if (totalInputAmount < request.amount) {
-      throw new Error('Insufficient funds in input notes');
+      throw new CipherPayError(
+        'Insufficient funds in input notes',
+        ErrorType.INSUFFICIENT_FUNDS,
+        { 
+          required: request.amount.toString(),
+          available: totalInputAmount.toString(),
+          inputNotes: request.fromNotes.length
+        },
+        {
+          action: 'Add more input notes',
+          description: 'Insufficient funds in selected input notes. Please add more notes or reduce the reshield amount.'
+        },
+        false
+      );
     }
   }
 

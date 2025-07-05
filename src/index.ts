@@ -35,7 +35,9 @@ export * from './types/CipherTx';
 // Utility exports
 export * from './utils/encryption';
 export * from './utils/hash';
-export * from './utils/logger';
+
+// Monitoring & Observability exports
+export * from './monitoring';
 
 // Error exports
 export { ErrorHandler, ErrorType, ErrorContext } from './errors/ErrorHandler';

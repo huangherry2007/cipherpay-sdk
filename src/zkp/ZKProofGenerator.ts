@@ -3,6 +3,7 @@ import * as snarkjs from 'snarkjs';
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { ZKProof, TransferProofInput, WithdrawProofInput, ReshieldProofInput } from '../types/ZKProof';
+import { ErrorHandler, ErrorType, CipherPayError } from '../errors/ErrorHandler';
 
 export class ZKProofGenerator {
   private readonly wasmBuffer: Buffer;
@@ -20,9 +21,37 @@ export class ZKProofGenerator {
       this.verificationKey = JSON.parse(readFileSync(verificationKeyPath, 'utf8'));
     } catch (error) {
       if (error instanceof Error) {
-        throw new Error(`Failed to load proof files: ${error.message}`);
+        const cipherPayError = new CipherPayError(
+          `Failed to load proof files: ${error.message}`,
+          ErrorType.MISSING_DEPENDENCY,
+          { 
+            wasmPath,
+            zkeyPath,
+            verificationKeyPath
+          },
+          {
+            action: 'Check file paths',
+            description: 'Failed to load proof files. Please verify the file paths are correct and files exist.'
+          },
+          false
+        );
+        throw ErrorHandler.getInstance().handleError(cipherPayError);
       }
-      throw new Error('Failed to load proof files: Unknown error');
+      const cipherPayError = new CipherPayError(
+        'Failed to load proof files: Unknown error',
+        ErrorType.MISSING_DEPENDENCY,
+        { 
+          wasmPath,
+          zkeyPath,
+          verificationKeyPath
+        },
+        {
+          action: 'Check file paths',
+          description: 'Failed to load proof files due to an unknown error. Please verify the file paths are correct.'
+        },
+        false
+      );
+      throw ErrorHandler.getInstance().handleError(cipherPayError);
     }
   }
 
@@ -161,9 +190,37 @@ export class ZKProofGenerator {
       );
     } catch (error) {
       if (error instanceof Error) {
-        throw new Error(`Failed to verify proof: ${error.message}`);
+        const cipherPayError = new CipherPayError(
+          `Failed to verify proof: ${error.message}`,
+          ErrorType.PROOF_VERIFICATION_FAILED,
+          { 
+            publicSignalsCount: publicSignals.length,
+            proofProtocol: proof.protocol,
+            proofCurve: proof.curve
+          },
+          {
+            action: 'Check proof and signals',
+            description: 'Failed to verify proof. Please verify the proof and public signals are valid.'
+          },
+          true
+        );
+        throw ErrorHandler.getInstance().handleError(cipherPayError);
       }
-      throw new Error('Failed to verify proof: Unknown error');
+      const cipherPayError = new CipherPayError(
+        'Failed to verify proof: Unknown error',
+        ErrorType.PROOF_VERIFICATION_FAILED,
+        { 
+          publicSignalsCount: publicSignals.length,
+          proofProtocol: proof.protocol,
+          proofCurve: proof.curve
+        },
+        {
+          action: 'Check proof and signals',
+          description: 'Failed to verify proof due to an unknown error. Please verify the proof and public signals are valid.'
+        },
+        true
+      );
+      throw ErrorHandler.getInstance().handleError(cipherPayError);
     }
   }
 } 

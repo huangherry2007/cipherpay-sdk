@@ -2,6 +2,11 @@ import { ethers } from 'ethers';
 import { Connection, PublicKey, Transaction, sendAndConfirmTransaction, Keypair, LAMPORTS_PER_SOL } from '@solana/web3.js';
 import { PhantomWalletAdapter } from '@solana/wallet-adapter-phantom';
 import * as nacl from 'tweetnacl';
+import { ErrorHandler, ErrorType, CipherPayError } from '../errors/ErrorHandler';
+import { globalRateLimiter } from '../utils/RateLimiter';
+import { InputValidator, ValidationSchemas } from '../security/validation';
+import { AuditLogger } from '../security/audit';
+import { AuthManager, Permissions } from '../security/auth';
 
 export type ChainType = 'ethereum' | 'solana';
 
@@ -43,11 +48,23 @@ export class WalletProvider {
   private connection: Connection;
   private keypair: Keypair | null = null;
   private config: WalletConfig;
+  private validator: InputValidator;
+  private auditLogger: AuditLogger;
+  private authManager: AuthManager;
 
   constructor(chainType: ChainType, config: WalletConfig) {
     // Validate chain type
     if (chainType !== 'ethereum' && chainType !== 'solana') {
-      throw new Error('Unsupported chain type');
+      throw new CipherPayError(
+        'Unsupported chain type',
+        ErrorType.INVALID_INPUT,
+        { chainType },
+        {
+          action: 'Use supported chain type',
+          description: 'Only ethereum and solana chain types are supported.'
+        },
+        false
+      );
     }
     
     this.chainType = chainType;
@@ -59,6 +76,11 @@ export class WalletProvider {
     if (chainType === 'solana') {
       this.solanaConnection = new Connection(config.rpcUrl || 'https://api.mainnet-beta.solana.com');
     }
+
+    // Initialize security components
+    this.validator = InputValidator.getInstance();
+    this.auditLogger = AuditLogger.getInstance();
+    this.authManager = AuthManager.getInstance();
   }
 
   /**
@@ -66,17 +88,97 @@ export class WalletProvider {
    * @returns Promise<UserAccount> The connected user account
    */
   async connect(): Promise<UserAccount> {
+    // Apply rate limiting for wallet connection
+    globalRateLimiter.consume('WALLET_OPERATIONS', {
+      operation: 'connect',
+      chainType: this.chainType
+    });
+
     try {
+      // Audit wallet connection attempt
+      this.auditLogger.logEvent({
+        userId: 'anonymous', // Will be updated with actual user ID when auth is implemented
+        action: 'wallet_connection_attempt',
+        resource: 'wallet',
+        details: { chainType: this.chainType },
+        success: true,
+        severity: 'low',
+        category: 'security'
+      });
+
       if (this.chainType === 'ethereum') {
-        return await this.connectEthereum();
+        const result = await this.connectEthereum();
+        
+        // Audit successful connection
+        this.auditLogger.logEvent({
+          userId: 'anonymous',
+          action: 'wallet_connected',
+          resource: 'wallet',
+          resourceId: result.address,
+          details: { chainType: this.chainType, address: result.address },
+          success: true,
+          severity: 'low',
+          category: 'security'
+        });
+        
+        return result;
       } else {
-        return await this.connectSolana();
+        const result = await this.connectSolana();
+        
+        // Audit successful connection
+        this.auditLogger.logEvent({
+          userId: 'anonymous',
+          action: 'wallet_connected',
+          resource: 'wallet',
+          resourceId: result.address,
+          details: { chainType: this.chainType, address: result.address },
+          success: true,
+          severity: 'low',
+          category: 'security'
+        });
+        
+        return result;
       }
     } catch (error) {
+      // Audit failed connection
+      this.auditLogger.logEvent({
+        userId: 'anonymous',
+        action: 'wallet_connection_failed',
+        resource: 'wallet',
+        details: { 
+          chainType: this.chainType, 
+          error: error instanceof Error ? error.message : 'Unknown error' 
+        },
+        success: false,
+        errorMessage: error instanceof Error ? error.message : 'Unknown error',
+        severity: 'medium',
+        category: 'security'
+      });
+
       if (error instanceof Error) {
-        throw new Error(`Failed to connect wallet: ${error.message}`);
+        const cipherPayError = new CipherPayError(
+          `Failed to connect wallet: ${error.message}`,
+          ErrorType.WALLET_CONNECTION_FAILED,
+          { chainType: this.chainType },
+          {
+            action: 'Check wallet installation',
+            description: 'Failed to connect to wallet. Please ensure the wallet is installed and accessible.'
+          },
+          true
+        );
+        throw ErrorHandler.getInstance().handleError(cipherPayError);
       }
-      throw new Error('Failed to connect wallet: Unknown error');
+      const cipherPayError = new CipherPayError(
+        'Failed to connect wallet: Unknown error',
+        ErrorType.WALLET_CONNECTION_FAILED,
+        { chainType: this.chainType },
+        {
+          action: 'Check wallet installation',
+          description: 'Failed to connect to wallet due to an unknown error.'
+        },
+        true
+      );
+      throw ErrorHandler.getInstance().handleError(cipherPayError);
     }
   }
 
@@ -86,7 +188,16 @@ export class WalletProvider {
    */
   getPublicAddress(): string {
     if (!this.userAccount) {
-      throw new Error('No wallet connected');
+      throw new CipherPayError(
+        'No wallet connected',
+        ErrorType.WALLET_CONNECTION_FAILED,
+        { chainType: this.chainType },
+        {
+          action: 'Connect wallet first',
+          description: 'No wallet is currently connected. Please connect a wallet first.'
+        },
+        false
+      );
     }
     return this.userAccount.address;
   }
@@ -97,21 +208,129 @@ export class WalletProvider {
    * @returns Promise<TxReceipt> The transaction receipt
    */
   async signAndSendDepositTx(amount: number): Promise<TxReceipt> {
-    if (!this.userAccount) {
-      throw new Error('No wallet connected');
+    // Validate input
+    const amountValidation = this.validator.validateAmount(amount.toString());
+    if (!amountValidation.isValid) {
+      const cipherPayError = new CipherPayError(
+        'Invalid deposit amount',
+        ErrorType.INVALID_INPUT,
+        { amount: amount.toString() },
+        {
+          action: 'Provide a valid positive amount',
+          description: 'Deposit amount must be a valid positive number.'
+        },
+        false
+      );
+      throw ErrorHandler.getInstance().handleError(cipherPayError);
     }
 
+    // Apply rate limiting for deposit transactions
+    globalRateLimiter.consume('TRANSACTION_SIGNING', {
+      operation: 'deposit',
+      chainType: this.chainType,
+      amount: amountValidation.sanitized.toString()
+    });
+
+    if (!this.userAccount) {
+      throw new CipherPayError(
+        'No wallet connected',
+        ErrorType.WALLET_CONNECTION_FAILED,
+        { chainType: this.chainType },
+        {
+          action: 'Connect wallet first',
+          description: 'No wallet is currently connected. Please connect a wallet first.'
+        },
+        false
+      );
+    }
+
+    // Audit deposit attempt
+    this.auditLogger.logEvent({
+      userId: 'anonymous',
+      action: 'deposit_attempt',
+      resource: 'transfer',
+      resourceId: this.userAccount.address,
+      details: { 
+        chainType: this.chainType, 
+        amount: amountValidation.sanitized,
+        address: this.userAccount.address 
+      },
+      success: true,
+      severity: 'medium',
+      category: 'financial'
+    });
+
     try {
+      let result: TxReceipt;
+      
       if (this.chainType === 'ethereum') {
-        return await this.sendEthereumDeposit(amount);
+        result = await this.sendEthereumDeposit(amountValidation.sanitized);
       } else {
-        return await this.sendSolanaDeposit(amount);
+        result = await this.sendSolanaDeposit(amountValidation.sanitized);
       }
+
+      // Audit successful deposit
+      this.auditLogger.logEvent({
+        userId: 'anonymous',
+        action: 'deposit_completed',
+        resource: 'transfer',
+        resourceId: result.txHash,
+        details: { 
+          chainType: this.chainType, 
+          amount: amountValidation.sanitized,
+          txHash: result.txHash,
+          status: result.status 
+        },
+        success: true,
+        severity: 'medium',
+        category: 'financial'
+      });
+
+      return result;
+
     } catch (error) {
+      // Audit failed deposit
+      this.auditLogger.logEvent({
+        userId: 'anonymous',
+        action: 'deposit_failed',
+        resource: 'transfer',
+        resourceId: this.userAccount.address,
+        details: { 
+          chainType: this.chainType, 
+          amount: amountValidation.sanitized,
+          address: this.userAccount.address,
+          error: error instanceof Error ? error.message : 'Unknown error'
+        },
+        success: false,
+        errorMessage: error instanceof Error ? error.message : 'Unknown error',
+        severity: 'high',
+        category: 'financial'
+      });
+
       if (error instanceof Error) {
-        throw new Error(`Failed to send deposit: ${error.message}`);
+        const cipherPayError = new CipherPayError(
+          `Failed to send deposit: ${error.message}`,
+          ErrorType.TRANSACTION_FAILED,
+          { chainType: this.chainType, amount: amountValidation.sanitized.toString() },
+          {
+            action: 'Check balance and retry',
+            description: 'Failed to send deposit transaction. Please check your balance and try again.'
+          },
+          true
+        );
+        throw ErrorHandler.getInstance().handleError(cipherPayError);
       }
-      throw new Error('Failed to send deposit: Unknown error');
+      const cipherPayError = new CipherPayError(
+        'Failed to send deposit: Unknown error',
+        ErrorType.TRANSACTION_FAILED,
+        { chainType: this.chainType, amount: amountValidation.sanitized.toString() },
+        {
+          action: 'Check balance and retry',
+          description: 'Failed to send deposit transaction due to an unknown error.'
+        },
+        true
+      );
+      throw ErrorHandler.getInstance().handleError(cipherPayError);
     }
   }
 
@@ -120,7 +339,16 @@ export class WalletProvider {
    */
   private async connectEthereum(): Promise<UserAccount> {
     if (typeof (window as any).ethereum === 'undefined') {
-      throw new Error('MetaMask not installed');
+      throw new CipherPayError(
+        'MetaMask not installed',
+        ErrorType.WALLET_CONNECTION_FAILED,
+        { walletType: 'MetaMask' },
+        {
+          action: 'Install MetaMask',
+          description: 'MetaMask is not installed. Please install MetaMask from the Chrome Web Store.'
+        },
+        false
+      );
     }
 
     console.log('DEBUG: connectEthereum - window.ethereum:', (window as any).ethereum);
@@ -155,7 +383,16 @@ export class WalletProvider {
     await phantom.connect();
 
     if (!phantom.publicKey) {
-      throw new Error('Failed to connect to Phantom wallet');
+      throw new CipherPayError(
+        'Failed to connect to Phantom wallet',
+        ErrorType.WALLET_CONNECTION_FAILED,
+        { walletType: 'Phantom' },
+        {
+          action: 'Check Phantom wallet',
+          description: 'Failed to connect to Phantom wallet. Please ensure Phantom is installed and unlocked.'
+        },
+        true
+      );
     }
 
     this.userAccount = {
@@ -172,7 +409,16 @@ export class WalletProvider {
    */
   private async sendEthereumDeposit(amount: number): Promise<TxReceipt> {
     if (!this.userAccount || this.chainType !== 'ethereum') {
-      throw new Error('Invalid wallet state');
+      throw new CipherPayError(
+        'Invalid wallet state',
+        ErrorType.WALLET_CONNECTION_FAILED,
+        { chainType: this.chainType, hasUserAccount: !!this.userAccount },
+        {
+          action: 'Reconnect wallet',
+          description: 'Invalid wallet state. Please reconnect your wallet.'
+        },
+        false
+      );
     }
 
     const provider = this.userAccount.provider;
@@ -198,7 +444,16 @@ export class WalletProvider {
    */
   private async sendSolanaDeposit(amount: number): Promise<TxReceipt> {
     if (!this.userAccount || this.chainType !== 'solana') {
-      throw new Error('Invalid wallet state');
+      throw new CipherPayError(
+        'Invalid wallet state',
+        ErrorType.WALLET_CONNECTION_FAILED,
+        { chainType: this.chainType, hasUserAccount: !!this.userAccount },
+        {
+          action: 'Reconnect wallet',
+          description: 'Invalid wallet state. Please reconnect your wallet.'
+        },
+        false
+      );
     }
 
     const wallet = this.userAccount.provider;

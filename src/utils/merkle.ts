@@ -1,5 +1,6 @@
 import { MerkleTree } from 'merkletreejs';
 import { hash } from './hash';
+import { ErrorHandler, ErrorType, CipherPayError } from '../errors/ErrorHandler';
 
 /**
  * Creates a merkle tree from an array of leaves
@@ -28,7 +29,19 @@ export function getMerkleProof(tree: MerkleTree, leaf: string): string[] {
     // Check if the leaf exists in the tree
     const leafExists = leaves.some(l => l.equals(leafBuffer));
     if (!leafExists) {
-        throw new Error('Leaf not found in tree');
+        throw new CipherPayError(
+            'Leaf not found in tree',
+            ErrorType.NOTE_NOT_FOUND,
+            { 
+                leaf,
+                treeLeavesCount: leaves.length
+            },
+            {
+                action: 'Check leaf value',
+                description: 'The specified leaf was not found in the Merkle tree. Please verify the leaf value is correct.'
+            },
+            false
+        );
     }
     
     const proof = tree.getProof(leafBuffer);

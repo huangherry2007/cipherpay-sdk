@@ -1,5 +1,5 @@
-import { WalletProvider } from '../src/core/WalletProvider';
-import { Logger } from '../src/utils/logger';
+import { WalletProvider, ChainType } from '../src/core/WalletProvider';
+import { Logger } from '../src/monitoring/observability/logger';
 
 // Mock ethers at the module level
 jest.doMock('ethers', () => {
@@ -45,15 +45,15 @@ jest.doMock('ethers', () => {
 const { ethers } = require('ethers');
 
 // Mock the logger
-jest.mock('../src/utils/logger', () => ({
-    Logger: {
-        getInstance: jest.fn().mockReturnValue({
-            info: jest.fn(),
-            error: jest.fn(),
-            debug: jest.fn(),
-            warn: jest.fn()
-        })
-    }
+jest.mock('../src/monitoring/observability/logger', () => ({
+  Logger: {
+      getInstance: jest.fn().mockReturnValue({
+          info: jest.fn(),
+          warn: jest.fn(),
+          error: jest.fn(),
+          debug: jest.fn()
+      })
+  }
 }));
 
 describe('WalletProvider', () => {

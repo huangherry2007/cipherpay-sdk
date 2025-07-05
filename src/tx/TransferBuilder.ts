@@ -3,7 +3,7 @@ import { NoteManager } from '../core/NoteManager';
 import { ZKProver } from '../zk/ZKProver';
 import { ShieldedNote } from '../types/Note';
 import { ZKProof } from '../types/ZKProof';
-import { Logger } from '../utils/logger';
+import { Logger } from '../monitoring/observability/logger';
 
 /**
  * Builder class for creating and sending shielded transfers

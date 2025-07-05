@@ -69,7 +69,7 @@ export class EventMonitor {
     this.isMonitoring = false;
     this.lastProcessedBlock = config.startBlock || 0;
     this.lastProcessedSlot = config.startSlot || 0;
-    this.errorHandler = new ErrorHandler();
+    this.errorHandler = ErrorHandler.getInstance();
     this.pollingInterval = config.pollingInterval || 5000;
 
     if (config.chainType === 'ethereum') {

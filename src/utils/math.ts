@@ -1,4 +1,5 @@
 import { utils } from 'ethers';
+import { ErrorHandler, ErrorType, CipherPayError } from '../errors/ErrorHandler';
 
 // Maximum safe bigint value (2^256 - 1)
 const MAX_SAFE_BIGINT = BigInt('0xffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff');
@@ -33,7 +34,20 @@ export function toBigInt(amount: number | string, decimals: number = 18): bigint
   }
   
   if (!isSafeBigInt(result)) {
-    throw new Error('Amount exceeds maximum safe value');
+    throw new CipherPayError(
+      'Amount exceeds maximum safe value',
+      ErrorType.INVALID_AMOUNT,
+      { 
+        amount: amount.toString(),
+        decimals,
+        result: result.toString()
+      },
+      {
+        action: 'Use smaller amount',
+        description: 'Amount exceeds maximum safe value. Please use a smaller amount.'
+      },
+      false
+    );
   }
   return result;
 }
@@ -47,7 +61,19 @@ export function toBigInt(amount: number | string, decimals: number = 18): bigint
  */
 export function fromBigInt(amount: bigint, decimals: number = 18): number {
   if (!isSafeBigInt(amount)) {
-    throw new Error('Amount exceeds maximum safe value');
+    throw new CipherPayError(
+      'Amount exceeds maximum safe value',
+      ErrorType.INVALID_AMOUNT,
+      { 
+        amount: amount.toString(),
+        decimals
+      },
+      {
+        action: 'Use smaller amount',
+        description: 'Amount exceeds maximum safe value. Please use a smaller amount.'
+      },
+      false
+    );
   }
   return Number(utils.formatUnits(amount, decimals));
 }
@@ -61,12 +87,37 @@ export function fromBigInt(amount: bigint, decimals: number = 18): number {
  */
 export function add(a: bigint, b: bigint): bigint {
   if (!isSafeBigInt(a) || !isSafeBigInt(b)) {
-    throw new Error('Input values exceed maximum safe value');
+    throw new CipherPayError(
+      'Input values exceed maximum safe value',
+      ErrorType.INVALID_AMOUNT,
+      { 
+        a: a.toString(),
+        b: b.toString()
+      },
+      {
+        action: 'Use smaller values',
+        description: 'Input values exceed maximum safe value. Please use smaller values.'
+      },
+      false
+    );
   }
   
   const result = a + b;
   if (!isSafeBigInt(result)) {
-    throw new Error('Addition result exceeds maximum safe value');
+    throw new CipherPayError(
+      'Addition result exceeds maximum safe value',
+      ErrorType.INVALID_AMOUNT,
+      { 
+        a: a.toString(),
+        b: b.toString(),
+        result: result.toString()
+      },
+      {
+        action: 'Use smaller values',
+        description: 'Addition result exceeds maximum safe value. Please use smaller values.'
+      },
+      false
+    );
   }
   return result;
 }
@@ -80,12 +131,37 @@ export function add(a: bigint, b: bigint): bigint {
  */
 export function subtract(a: bigint, b: bigint): bigint {
   if (!isSafeBigInt(a) || !isSafeBigInt(b)) {
-    throw new Error('Input values exceed maximum safe value');
+    throw new CipherPayError(
+      'Input values exceed maximum safe value',
+      ErrorType.INVALID_AMOUNT,
+      { 
+        a: a.toString(),
+        b: b.toString()
+      },
+      {
+        action: 'Use smaller values',
+        description: 'Input values exceed maximum safe value. Please use smaller values.'
+      },
+      false
+    );
   }
   
   const result = a - b;
   if (!isSafeBigInt(result)) {
-    throw new Error('Subtraction result exceeds maximum safe value');
+    throw new CipherPayError(
+      'Subtraction result exceeds maximum safe value',
+      ErrorType.INVALID_AMOUNT,
+      { 
+        a: a.toString(),
+        b: b.toString(),
+        result: result.toString()
+      },
+      {
+        action: 'Use smaller values',
+        description: 'Subtraction result exceeds maximum safe value. Please use smaller values.'
+      },
+      false
+    );
   }
   return result;
 }
@@ -99,7 +175,19 @@ export function subtract(a: bigint, b: bigint): bigint {
  */
 export function multiply(a: bigint, b: bigint): bigint {
   if (!isSafeBigInt(a) || !isSafeBigInt(b)) {
-    throw new Error('Input values exceed maximum safe value');
+    throw new CipherPayError(
+      'Input values exceed maximum safe value',
+      ErrorType.INVALID_AMOUNT,
+      { 
+        a: a.toString(),
+        b: b.toString()
+      },
+      {
+        action: 'Use smaller values',
+        description: 'Input values exceed maximum safe value. Please use smaller values.'
+      },
+      false
+    );
   }
   
   // Check for potential overflow before multiplication
@@ -109,12 +197,37 @@ export function multiply(a: bigint, b: bigint): bigint {
   // Use Number.MAX_SAFE_INTEGER for overflow detection to match test expectations
   const overflowLimit = BigInt(Number.MAX_SAFE_INTEGER);
   if (absA > BigInt(0) && absB > BigInt(0) && absA > overflowLimit / absB) {
-    throw new Error('Multiplication would result in overflow');
+    throw new CipherPayError(
+      'Multiplication would result in overflow',
+      ErrorType.INVALID_AMOUNT,
+      { 
+        a: a.toString(),
+        b: b.toString()
+      },
+      {
+        action: 'Use smaller values',
+        description: 'Multiplication would result in overflow. Please use smaller values.'
+      },
+      false
+    );
   }
   
   const result = a * b;
   if (!isSafeBigInt(result)) {
-    throw new Error('Multiplication result exceeds maximum safe value');
+    throw new CipherPayError(
+      'Multiplication result exceeds maximum safe value',
+      ErrorType.INVALID_AMOUNT,
+      { 
+        a: a.toString(),
+        b: b.toString(),
+        result: result.toString()
+      },
+      {
+        action: 'Use smaller values',
+        description: 'Multiplication result exceeds maximum safe value. Please use smaller values.'
+      },
+      false
+    );
   }
   return result;
 }
@@ -128,16 +241,53 @@ export function multiply(a: bigint, b: bigint): bigint {
  */
 export function divide(a: bigint, b: bigint): bigint {
   if (!isSafeBigInt(a) || !isSafeBigInt(b)) {
-    throw new Error('Input values exceed maximum safe value');
+    throw new CipherPayError(
+      'Input values exceed maximum safe value',
+      ErrorType.INVALID_AMOUNT,
+      { 
+        a: a.toString(),
+        b: b.toString()
+      },
+      {
+        action: 'Use smaller values',
+        description: 'Input values exceed maximum safe value. Please use smaller values.'
+      },
+      false
+    );
   }
   
   if (b === BigInt(0)) {
-    throw new Error('Division by zero');
+    throw new CipherPayError(
+      'Division by zero',
+      ErrorType.INVALID_AMOUNT,
+      { 
+        a: a.toString(),
+        b: b.toString()
+      },
+      {
+        action: 'Use non-zero divisor',
+        description: 'Division by zero is not allowed. Please use a non-zero divisor.'
+      },
+      false
+    );
   }
   
   const result = a / b;
   if (!isSafeBigInt(result)) {
-    throw new Error('Division result exceeds maximum safe value');
+    throw new CipherPayError(
+      'Division result exceeds maximum safe value',
+      ErrorType.INVALID_AMOUNT,
+      { 
+        a: a.toString(),
+        b: b.toString(),
+        result: result.toString()
+      },
+      {
+        action: 'Use smaller values',
+        description: 'Division result exceeds maximum safe value. Please use smaller values.'
+      },
+      false
+    );
   }
   return result;
 }
@@ -151,16 +301,53 @@ export function divide(a: bigint, b: bigint): bigint {
  */
 export function modulo(a: bigint, b: bigint): bigint {
   if (!isSafeBigInt(a) || !isSafeBigInt(b)) {
-    throw new Error('Input values exceed maximum safe value');
+    throw new CipherPayError(
+      'Input values exceed maximum safe value',
+      ErrorType.INVALID_AMOUNT,
+      { 
+        a: a.toString(),
+        b: b.toString()
+      },
+      {
+        action: 'Use smaller values',
+        description: 'Input values exceed maximum safe value. Please use smaller values.'
+      },
+      false
+    );
   }
   
   if (b === BigInt(0)) {
-    throw new Error('Modulo by zero');
+    throw new CipherPayError(
+      'Modulo by zero',
+      ErrorType.INVALID_AMOUNT,
+      { 
+        a: a.toString(),
+        b: b.toString()
+      },
+      {
+        action: 'Use non-zero modulus',
+        description: 'Modulo by zero is not allowed. Please use a non-zero modulus.'
+      },
+      false
+    );
   }
   
   const result = a % b;
   if (!isSafeBigInt(result)) {
-    throw new Error('Modulo result exceeds maximum safe value');
+    throw new CipherPayError(
+      'Modulo result exceeds maximum safe value',
+      ErrorType.INVALID_AMOUNT,
+      { 
+        a: a.toString(),
+        b: b.toString(),
+        result: result.toString()
+      },
+      {
+        action: 'Use smaller values',
+        description: 'Modulo result exceeds maximum safe value. Please use smaller values.'
+      },
+      false
+    );
   }
   return result;
 }
@@ -175,7 +362,19 @@ export function modulo(a: bigint, b: bigint): bigint {
  */
 export function isInRange(value: bigint, min: bigint, max: bigint): boolean {
   if (!isSafeBigInt(min) || !isSafeBigInt(max)) {
-    throw new Error('Range values exceed maximum safe value');
+    throw new CipherPayError(
+      'Range values exceed maximum safe value',
+      ErrorType.INVALID_AMOUNT,
+      { 
+        min: min.toString(),
+        max: max.toString()
+      },
+      {
+        action: 'Use smaller range values',
+        description: 'Range values exceed maximum safe value. Please use smaller range values.'
+      },
+      false
+    );
   }
   return value >= min && value <= max;
 }
@@ -189,25 +388,78 @@ export function isInRange(value: bigint, min: bigint, max: bigint): boolean {
  */
 export function randomBigInt(min: bigint, max: bigint): bigint {
   if (!isSafeBigInt(min) || !isSafeBigInt(max)) {
-    throw new Error('Range values exceed maximum safe value');
+    throw new CipherPayError(
+      'Range values exceed maximum safe value',
+      ErrorType.INVALID_AMOUNT,
+      { 
+        min: min.toString(),
+        max: max.toString()
+      },
+      {
+        action: 'Use smaller range values',
+        description: 'Range values exceed maximum safe value. Please use smaller range values.'
+      },
+      false
+    );
   }
   
   if (min >= max) {
-    throw new Error('Invalid range: min must be less than max');
+    throw new CipherPayError(
+      'Invalid range: min must be less than max',
+      ErrorType.INVALID_INPUT,
+      { 
+        min: min.toString(),
+        max: max.toString()
+      },
+      {
+        action: 'Use valid range',
+        description: 'Invalid range: minimum value must be less than maximum value.'
+      },
+      false
+    );
   }
   
   const range = max - min;
   if (!isSafeBigInt(range)) {
-    throw new Error('Range size exceeds maximum safe value');
+    throw new CipherPayError(
+      'Range size exceeds maximum safe value',
+      ErrorType.INVALID_AMOUNT,
+      { 
+        min: min.toString(),
+        max: max.toString(),
+        range: range.toString()
+      },
+      {
+        action: 'Use smaller range',
+        description: 'Range size exceeds maximum safe value. Please use a smaller range.'
+      },
+      false
+    );
   }
   
-  const randomBytes = utils.randomBytes(32);
-  const randomValue = BigInt('0x' + utils.hexlify(randomBytes));
+  // Generate random value within range
+  const randomBytes = new Uint8Array(32);
+  crypto.getRandomValues(randomBytes);
+  const randomValue = BigInt('0x' + Array.from(randomBytes).map(b => b.toString(16).padStart(2, '0')).join(''));
   const result = min + (randomValue % range);
   
   if (!isSafeBigInt(result)) {
-    throw new Error('Random value exceeds maximum safe value');
+    throw new CipherPayError(
+      'Random value exceeds maximum safe value',
+      ErrorType.INVALID_AMOUNT,
+      { 
+        min: min.toString(),
+        max: max.toString(),
+        result: result.toString()
+      },
+      {
+        action: 'Use smaller range',
+        description: 'Random value exceeds maximum safe value. Please use a smaller range.'
+      },
+      false
+    );
   }
+  
   return result;
 }
 

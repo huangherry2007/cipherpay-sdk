@@ -1,5 +1,5 @@
 import { ZKProver } from '../src/zk/ZKProver';
-import { Logger } from '../src/utils/logger';
+import { Logger } from '../src/monitoring/observability/logger';
 import { ShieldedNote } from '../src/types/Note';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -36,13 +36,13 @@ jest.mock('snarkjs', () => ({
 }));
 
 // Mock the logger
-jest.mock('../src/utils/logger', () => ({
+jest.mock('../src/monitoring/observability/logger', () => ({
     Logger: {
         getInstance: jest.fn().mockReturnValue({
             info: jest.fn(),
+            warn: jest.fn(),
             error: jest.fn(),
-            debug: jest.fn(),
-            warn: jest.fn()
+            debug: jest.fn()
         })
     }
 }));

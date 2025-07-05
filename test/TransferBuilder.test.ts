@@ -1,18 +1,19 @@
 import { TransferBuilder } from '../src/tx/TransferBuilder';
 import { NoteManager } from '../src/core/NoteManager';
+import { ViewKeyManager } from '../src/core/ViewKeyManager';
 import { ZKProver } from '../src/zk/ZKProver';
 import { ShieldedNote } from '../src/types/Note';
 import { ZKProof } from '../src/types/ZKProof';
-import { Logger } from '../src/utils/logger';
+import { Logger } from '../src/monitoring/observability/logger';
 
 // Mock the logger
-jest.mock('../src/utils/logger', () => ({
+jest.mock('../src/monitoring/observability/logger', () => ({
     Logger: {
         getInstance: jest.fn().mockReturnValue({
             info: jest.fn(),
+            warn: jest.fn(),
             error: jest.fn(),
-            debug: jest.fn(),
-            warn: jest.fn()
+            debug: jest.fn()
         })
     }
 }));

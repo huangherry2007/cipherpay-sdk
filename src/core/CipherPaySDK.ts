@@ -13,7 +13,7 @@ import { EventMonitor } from '../events/EventMonitor';
 import { StealthAddressManager } from './StealthAddressManager';
 import { ComplianceManager, ComplianceConfig } from '../compliance/ComplianceManager';
 import { CacheManager } from '../utils/CacheManager';
-import { Logger } from '../utils/logger';
+import { Logger } from '../monitoring/observability/logger';
 import { ShieldedNote } from '../types/Note';
 import { ZKProof } from '../types/ZKProof';
 

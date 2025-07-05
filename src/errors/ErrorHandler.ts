@@ -3,224 +3,290 @@ import { Connection } from '@solana/web3.js';
 import { ChainType } from '../core/WalletProvider';
 
 export enum ErrorType {
-  // Network errors
+  // Network and connectivity errors
   NETWORK_ERROR = 'NETWORK_ERROR',
-  RPC_ERROR = 'RPC_ERROR',
+  RPC_CONNECTION_FAILED = 'RPC_CONNECTION_FAILED',
   TIMEOUT_ERROR = 'TIMEOUT_ERROR',
-
-  // Transaction errors
-  TRANSACTION_FAILED = 'TRANSACTION_FAILED',
+  
+  // Cryptographic and proof errors
+  PROOF_GENERATION_FAILED = 'PROOF_GENERATION_FAILED',
+  PROOF_VERIFICATION_FAILED = 'PROOF_VERIFICATION_FAILED',
+  ENCRYPTION_ERROR = 'ENCRYPTION_ERROR',
+  DECRYPTION_ERROR = 'DECRYPTION_ERROR',
+  
+  // Wallet and key management errors
+  WALLET_CONNECTION_FAILED = 'WALLET_CONNECTION_FAILED',
   INSUFFICIENT_FUNDS = 'INSUFFICIENT_FUNDS',
-  GAS_ERROR = 'GAS_ERROR',
-  NONCE_ERROR = 'NONCE_ERROR',
-
-  // ZKP errors
-  PROOF_GENERATION_ERROR = 'PROOF_GENERATION_ERROR',
-  PROOF_VERIFICATION_ERROR = 'PROOF_VERIFICATION_ERROR',
-
-  // Note management errors
-  NOTE_DECRYPTION_ERROR = 'NOTE_DECRYPTION_ERROR',
-  NOTE_ENCRYPTION_ERROR = 'NOTE_ENCRYPTION_ERROR',
-  INVALID_NOTE = 'INVALID_NOTE',
-
-  // Event monitoring errors
-  EVENT_MONITORING_ERROR = 'EVENT_MONITORING_ERROR',
-  EVENT_PROCESSING_ERROR = 'EVENT_PROCESSING_ERROR',
-
-  // General errors
-  VALIDATION_ERROR = 'VALIDATION_ERROR',
+  INVALID_PRIVATE_KEY = 'INVALID_PRIVATE_KEY',
+  HARDWARE_WALLET_ERROR = 'HARDWARE_WALLET_ERROR',
+  
+  // Note and transaction errors
+  NOTE_NOT_FOUND = 'NOTE_NOT_FOUND',
+  NOTE_ALREADY_SPENT = 'NOTE_ALREADY_SPENT',
+  INVALID_NOTE_FORMAT = 'INVALID_NOTE_FORMAT',
+  TRANSACTION_FAILED = 'TRANSACTION_FAILED',
+  
+  // Validation errors
+  INVALID_INPUT = 'INVALID_INPUT',
+  INVALID_ADDRESS = 'INVALID_ADDRESS',
+  INVALID_AMOUNT = 'INVALID_AMOUNT',
+  
+  // Configuration errors
   CONFIGURATION_ERROR = 'CONFIGURATION_ERROR',
+  MISSING_DEPENDENCY = 'MISSING_DEPENDENCY',
+  
+  // Rate limiting and quota errors
+  RATE_LIMIT_EXCEEDED = 'RATE_LIMIT_EXCEEDED',
+  QUOTA_EXCEEDED = 'QUOTA_EXCEEDED',
+  
+  // Compliance and audit errors
+  COMPLIANCE_VIOLATION = 'COMPLIANCE_VIOLATION',
+  AUDIT_FAILED = 'AUDIT_FAILED',
+  
+  // Unknown errors
   UNKNOWN_ERROR = 'UNKNOWN_ERROR'
 }
 
 export interface ErrorContext {
-  chainType: ChainType;
-  operation: string;
-  details?: Record<string, any>;
-  timestamp: number;
+  operation?: string;
+  userId?: string;
+  transactionId?: string;
+  noteId?: string;
+  amount?: string;
+  recipientAddress?: string;
+  timestamp?: number;
   retryCount?: number;
+  [key: string]: any;
 }
 
-export interface ErrorRecoveryStrategy {
-  maxRetries: number;
-  backoffMs: number;
-  shouldRetry: (error: Error, context: ErrorContext) => boolean;
-  onRetry: (error: Error, context: ErrorContext) => Promise<void>;
-  onMaxRetriesExceeded: (error: Error, context: ErrorContext) => Promise<void>;
+export interface ErrorRecovery {
+  action: string;
+  description: string;
+  code?: string;
+  url?: string;
 }
 
-export class SDKError extends Error {
+export class CipherPayError extends Error {
+  public readonly code: string;
+  public readonly type: ErrorType;
+  public readonly context: ErrorContext;
+  public readonly recovery: ErrorRecovery | null;
+  public readonly retryable: boolean;
+  public readonly timestamp: number;
+  public readonly correlationId: string;
+
   constructor(
-    public readonly type: ErrorType,
-    public readonly context: ErrorContext,
-    message: string
+    message: string,
+    type: ErrorType,
+    context: ErrorContext = {},
+    recovery: ErrorRecovery | null = null,
+    retryable: boolean = false
   ) {
     super(message);
-    this.name = 'SDKError';
+    this.name = 'CipherPayError';
+    this.code = type;
+    this.type = type;
+    this.context = context;
+    this.recovery = recovery;
+    this.retryable = retryable;
+    this.timestamp = Date.now();
+    this.correlationId = this.generateCorrelationId();
+    
+    // Ensure proper stack trace
+    if (Error.captureStackTrace) {
+      Error.captureStackTrace(this, CipherPayError);
+    }
+  }
+
+  private generateCorrelationId(): string {
+    return `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  }
+
+  public toJSON(): object {
+    return {
+      name: this.name,
+      message: this.message,
+      code: this.code,
+      type: this.type,
+      context: this.context,
+      recovery: this.recovery,
+      retryable: this.retryable,
+      timestamp: this.timestamp,
+      correlationId: this.correlationId,
+      stack: this.stack
+    };
+  }
+
+  public static isCipherPayError(error: any): error is CipherPayError {
+    return error instanceof CipherPayError;
   }
 }
 
 export class ErrorHandler {
-  private readonly strategies: Map<ErrorType, ErrorRecoveryStrategy>;
-  private readonly errorLog: SDKError[] = [];
-  private readonly maxLogSize: number = 1000;
+  private static instance: ErrorHandler;
+  private errorListeners: Array<(error: CipherPayError) => void> = [];
+  private errorCounts: Map<ErrorType, number> = new Map();
+  private readonly maxErrorCount = 1000;
 
-  constructor() {
-    this.strategies = new Map();
-    this.initializeDefaultStrategies();
+  private constructor() {}
+
+  public static getInstance(): ErrorHandler {
+    if (!ErrorHandler.instance) {
+      ErrorHandler.instance = new ErrorHandler();
+    }
+    return ErrorHandler.instance;
   }
 
-  /**
-   * Handles an error with the appropriate recovery strategy
-   * @param error The error to handle
-   * @param context The context of the error
-   */
-  async handleError(error: Error, context: ErrorContext): Promise<void> {
-    const sdkError = this.normalizeError(error, context);
-    this.logError(sdkError);
+  public handleError(error: Error | CipherPayError, context: ErrorContext = {}): CipherPayError {
+    let cipherPayError: CipherPayError;
 
-    const strategy = this.getStrategy(sdkError.type);
-    if (!strategy) {
-      console.error('No recovery strategy found for error:', sdkError);
-      return;
+    if (CipherPayError.isCipherPayError(error)) {
+      // Create new error with merged context
+      cipherPayError = new CipherPayError(
+        error.message,
+        error.type,
+        { ...error.context, ...context },
+        error.recovery,
+        error.retryable
+      );
+    } else {
+      // Convert generic error to CipherPayError
+      cipherPayError = new CipherPayError(
+        error.message,
+        ErrorType.UNKNOWN_ERROR,
+        { ...context, originalError: error.name },
+        {
+          action: 'Check logs for details',
+          description: 'An unexpected error occurred. Please check the logs for more information.'
+        },
+        false
+      );
     }
 
-    const retryCount = (context.retryCount || 0) + 1;
-    if (retryCount > strategy.maxRetries) {
-      await strategy.onMaxRetriesExceeded(sdkError, { ...context, retryCount });
-      return;
-    }
+    // Track error count
+    this.incrementErrorCount(cipherPayError.type);
 
-    if (strategy.shouldRetry(sdkError, context)) {
-      await this.retryWithBackoff(sdkError, { ...context, retryCount }, strategy);
-    }
+    // Notify listeners
+    this.notifyListeners(cipherPayError);
+
+    // Log error
+    this.logError(cipherPayError);
+
+    return cipherPayError;
   }
 
-  /**
-   * Registers a custom recovery strategy for an error type
-   * @param type The error type
-   * @param strategy The recovery strategy
-   */
-  registerStrategy(type: ErrorType, strategy: ErrorRecoveryStrategy): void {
-    this.strategies.set(type, strategy);
+  public addErrorListener(listener: (error: CipherPayError) => void): void {
+    this.errorListeners.push(listener);
   }
 
-  /**
-   * Gets the error log
-   * @returns The error log
-   */
-  getErrorLog(): SDKError[] {
-    return [...this.errorLog];
-  }
-
-  /**
-   * Clears the error log
-   */
-  clearErrorLog(): void {
-    this.errorLog.length = 0;
-  }
-
-  private normalizeError(error: Error, context: ErrorContext): SDKError {
-    if (error instanceof SDKError) {
-      return error;
-    }
-
-    // Map common error types
-    let type = ErrorType.UNKNOWN_ERROR;
-    if (error.message.includes('network')) {
-      type = ErrorType.NETWORK_ERROR;
-    } else if (error.message.includes('insufficient funds')) {
-      type = ErrorType.INSUFFICIENT_FUNDS;
-    } else if (error.message.includes('nonce')) {
-      type = ErrorType.NONCE_ERROR;
-    } else if (error.message.includes('gas')) {
-      type = ErrorType.GAS_ERROR;
-    }
-
-    return new SDKError(type, context, error.message);
-  }
-
-  private async retryWithBackoff(
-    error: SDKError,
-    context: ErrorContext,
-    strategy: ErrorRecoveryStrategy
-  ): Promise<void> {
-    const backoffTime = strategy.backoffMs * Math.pow(2, (context.retryCount || 0) - 1);
-    await new Promise(resolve => setTimeout(resolve, backoffTime));
-    await strategy.onRetry(error, context);
-  }
-
-  private getStrategy(type: ErrorType): ErrorRecoveryStrategy | undefined {
-    return this.strategies.get(type);
-  }
-
-  private logError(error: SDKError): void {
-    this.errorLog.push(error);
-    if (this.errorLog.length > this.maxLogSize) {
-      this.errorLog.shift();
+  public removeErrorListener(listener: (error: CipherPayError) => void): void {
+    const index = this.errorListeners.indexOf(listener);
+    if (index > -1) {
+      this.errorListeners.splice(index, 1);
     }
   }
 
-  private initializeDefaultStrategies(): void {
-    // Network error strategy
-    this.registerStrategy(ErrorType.NETWORK_ERROR, {
-      maxRetries: 5,
-      backoffMs: 1000,
-      shouldRetry: (error, context) => {
-        return context.retryCount! < 5;
-      },
-      onRetry: async (error, context) => {
-        console.log(`Retrying network operation after error: ${error.message}`);
-      },
-      onMaxRetriesExceeded: async (error, context) => {
-        console.error('Max retries exceeded for network operation:', error);
+  public getErrorStats(): { [key in ErrorType]?: number } {
+    const stats: { [key in ErrorType]?: number } = {};
+    for (const [type, count] of this.errorCounts.entries()) {
+      stats[type] = count;
+    }
+    return stats;
+  }
+
+  public resetErrorCounts(): void {
+    this.errorCounts.clear();
+  }
+
+  private incrementErrorCount(type: ErrorType): void {
+    const currentCount = this.errorCounts.get(type) || 0;
+    this.errorCounts.set(type, currentCount + 1);
+  }
+
+  private notifyListeners(error: CipherPayError): void {
+    for (const listener of this.errorListeners) {
+      try {
+        listener(error);
+      } catch (listenerError) {
+        console.error('Error in error listener:', listenerError);
       }
-    });
+    }
+  }
 
-    // Transaction error strategy
-    this.registerStrategy(ErrorType.TRANSACTION_FAILED, {
-      maxRetries: 3,
-      backoffMs: 2000,
-      shouldRetry: (error, context) => {
-        // Don't retry if it's a permanent failure
-        return !error.message.includes('revert') && context.retryCount! < 3;
-      },
-      onRetry: async (error, context) => {
-        console.log(`Retrying failed transaction: ${error.message}`);
-      },
-      onMaxRetriesExceeded: async (error, context) => {
-        console.error('Max retries exceeded for transaction:', error);
-      }
-    });
+  private logError(error: CipherPayError): void {
+    const logData = {
+      level: 'error',
+      timestamp: new Date(error.timestamp).toISOString(),
+      correlationId: error.correlationId,
+      error: error.toJSON()
+    };
 
-    // ZKP error strategy
-    this.registerStrategy(ErrorType.PROOF_GENERATION_ERROR, {
-      maxRetries: 2,
-      backoffMs: 3000,
-      shouldRetry: (error, context) => {
-        return context.retryCount! < 2;
-      },
-      onRetry: async (error, context) => {
-        console.log(`Retrying proof generation: ${error.message}`);
-      },
-      onMaxRetriesExceeded: async (error, context) => {
-        console.error('Max retries exceeded for proof generation:', error);
-      }
-    });
+    console.error('CipherPay Error:', JSON.stringify(logData, null, 2));
+  }
 
-    // Event monitoring error strategy
-    this.registerStrategy(ErrorType.EVENT_MONITORING_ERROR, {
-      maxRetries: 10,
-      backoffMs: 5000,
-      shouldRetry: (error, context) => {
-        return context.retryCount! < 10;
+  // Factory methods for common errors
+  public static createNetworkError(message: string, context: ErrorContext = {}): CipherPayError {
+    return new CipherPayError(
+      message,
+      ErrorType.NETWORK_ERROR,
+      context,
+      {
+        action: 'Retry the operation',
+        description: 'Network connectivity issue. Please check your internet connection and try again.'
       },
-      onRetry: async (error, context) => {
-        console.log(`Retrying event monitoring: ${error.message}`);
+      true
+    );
+  }
+
+  public static createProofGenerationError(message: string, context: ErrorContext = {}): CipherPayError {
+    return new CipherPayError(
+      message,
+      ErrorType.PROOF_GENERATION_FAILED,
+      context,
+      {
+        action: 'Check input parameters and retry',
+        description: 'Failed to generate zero-knowledge proof. Please verify your input parameters.'
       },
-      onMaxRetriesExceeded: async (error, context) => {
-        console.error('Max retries exceeded for event monitoring:', error);
-      }
-    });
+      true
+    );
+  }
+
+  public static createInsufficientFundsError(required: string, available: string, context: ErrorContext = {}): CipherPayError {
+    return new CipherPayError(
+      `Insufficient funds. Required: ${required}, Available: ${available}`,
+      ErrorType.INSUFFICIENT_FUNDS,
+      { ...context, required, available },
+      {
+        action: 'Add more funds to your wallet',
+        description: 'Your wallet does not have sufficient funds for this transaction.'
+      },
+      false
+    );
+  }
+
+  public static createValidationError(message: string, field: string, context: ErrorContext = {}): CipherPayError {
+    return new CipherPayError(
+      message,
+      ErrorType.INVALID_INPUT,
+      { ...context, field },
+      {
+        action: 'Correct the input and retry',
+        description: `Invalid input for field: ${field}. Please check the format and try again.`
+      },
+      false
+    );
+  }
+
+  public static createRateLimitError(limit: number, window: number, context: ErrorContext = {}): CipherPayError {
+    return new CipherPayError(
+      `Rate limit exceeded. Limit: ${limit} requests per ${window}ms`,
+      ErrorType.RATE_LIMIT_EXCEEDED,
+      { ...context, limit, window },
+      {
+        action: 'Wait and retry later',
+        description: 'You have exceeded the rate limit. Please wait before making more requests.'
+      },
+      true
+    );
   }
 } 
