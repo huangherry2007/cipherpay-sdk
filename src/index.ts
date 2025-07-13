@@ -1,31 +1,13 @@
-// Core exports
-export { NoteManager, ShieldedNote } from './core/NoteManager';
-export { ViewKeyManager } from './core/ViewKeyManager';
-export { WalletProvider, ChainType } from './core/WalletProvider';
-export { MerkleTreeClient } from './core/MerkleTreeClient';
+// Import classes for global exposure
+import { CipherPaySDK } from './core/CipherPaySDK';
+import { ChainType } from './core/WalletProvider';
+
+// Browser-compatible exports
 export { CipherPaySDK } from './core/CipherPaySDK';
+export { ChainType } from './core/WalletProvider';
 
-// Phase 2 enhancements
-export { StealthAddressManager, StealthAddress, StealthAddressConfig } from './core/StealthAddressManager';
-export { ComplianceManager, ComplianceConfig, ComplianceRule, AuditTrail, ComplianceReport } from './compliance/ComplianceManager';
-export { CacheManager, CacheConfig, CacheEntry } from './utils/CacheManager';
-
-// Transaction exports
-export { TransactionBuilder } from './tx/TransactionBuilder';
-export { TransactionSigner } from './tx/TransactionSigner';
-export { ReshieldBuilder } from './tx/ReshieldBuilder';
-export { WithdrawBuilder } from './tx/WithdrawBuilder';
-
-// Relayer exports
-export { RelayerClient } from './relayer/RelayerClient';
-export { RelayerAPI, RelayerConfig, RelayerRequest, RelayerResponse } from './relayer/RelayerAPI';
-
-// ZK exports
-export { ZKProver } from './zk/ZKProver';
-export { ZKProofGenerator } from './zkp/ZKProofGenerator';
-
-// Event exports
-export { EventMonitor } from './events/EventMonitor';
+// Default export
+export { CipherPaySDK as default } from './core/CipherPaySDK';
 
 // Type exports
 export * from './types/Note';
@@ -36,8 +18,17 @@ export * from './types/CipherTx';
 export * from './utils/encryption';
 export * from './utils/hash';
 
-// Monitoring & Observability exports
-export * from './monitoring';
-
 // Error exports
 export { ErrorHandler, ErrorType, ErrorContext } from './errors/ErrorHandler';
+
+// Create ChainType value for global exposure
+const ChainTypeValue = {
+    ethereum: 'ethereum' as ChainType,
+    solana: 'solana' as ChainType
+};
+
+// Global exposure for browser
+if (typeof window !== 'undefined') {
+    (window as any).CipherPaySDK = CipherPaySDK;
+    (window as any).ChainType = ChainTypeValue;
+}

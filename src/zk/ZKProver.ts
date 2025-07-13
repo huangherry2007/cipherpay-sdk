@@ -1,34 +1,139 @@
-import * as snarkjs from 'snarkjs';
-import * as fs from 'fs';
-import * as path from 'path';
+// Browser-compatible ZKProver
+// Import only what we can safely use in the browser
 import { ZKProof, ZKInput, ProofInput, TransferProofInput, WithdrawProofInput, ReshieldProofInput } from '../types/ZKProof';
 import { ErrorHandler, ErrorType, CipherPayError } from '../errors/ErrorHandler';
 import { globalRateLimiter } from '../utils/RateLimiter';
 
+// Import snarkjs for all environments
+import * as snarkjs from 'snarkjs';
+
+// Browser-compatible file loading utilities
+const isBrowser = typeof window !== 'undefined';
+
+// Conditional imports for Node.js environment
+let fs: any, path: any;
+if (!isBrowser) {
+  try {
+    fs = require('fs');
+    path = require('path');
+  } catch (error) {
+    console.warn('Node.js modules not available');
+  }
+}
+
 export interface CircuitConfig {
-  wasmPath: string;
-  zkeyPath: string;
-  verifierPath: string;
+  wasmPath?: string;
+  zkeyPath?: string;
+  verifierPath?: string;
+  // Browser-compatible alternatives
+  wasmBuffer?: ArrayBuffer;
+  zkeyBuffer?: ArrayBuffer;
+  verifierData?: any;
+}
+
+export interface CircuitUrls {
+  wasmUrl: string;
+  zkeyUrl: string;
+  verifierUrl: string;
 }
 
 export class ZKProver {
-  private circuitPath: string;
+  private circuitPath?: string;
   private circuitConfigs: Map<string, CircuitConfig>;
 
-  constructor(circuitPath?: string) {
-    this.circuitPath = circuitPath || path.join(__dirname, 'circuits');
-    this.circuitConfigs = this.loadCircuitConfigs();
+  constructor(circuitConfigs?: Map<string, CircuitConfig>, circuitPath?: string) {
+    this.circuitPath = circuitPath;
+    this.circuitConfigs = circuitConfigs || new Map();
   }
 
   /**
-   * Loads circuit configurations for all available circuits
+   * Static factory method to create ZKProver from URLs (browser-friendly)
    */
-  private loadCircuitConfigs(): Map<string, CircuitConfig> {
+  static async fromUrls(urlMap: Record<string, CircuitUrls>): Promise<ZKProver> {
     const configs = new Map<string, CircuitConfig>();
-    
+
+    for (const [circuit, urls] of Object.entries(urlMap)) {
+      try {
+        const [wasmResponse, zkeyResponse, verifierResponse] = await Promise.all([
+          fetch(urls.wasmUrl),
+          fetch(urls.zkeyUrl),
+          fetch(urls.verifierUrl)
+        ]);
+
+        if (!wasmResponse.ok || !zkeyResponse.ok || !verifierResponse.ok) {
+          throw new Error(`Failed to fetch circuit files for ${circuit}`);
+        }
+
+        const [wasmBuffer, zkeyBuffer, verifierData] = await Promise.all([
+          wasmResponse.arrayBuffer(),
+          zkeyResponse.arrayBuffer(),
+          verifierResponse.json()
+        ]);
+
+        configs.set(circuit, {
+          wasmBuffer,
+          zkeyBuffer,
+          verifierData
+        });
+      } catch (error) {
+        console.warn(`Failed to load circuit ${circuit}:`, error);
+      }
+    }
+
+    return new ZKProver(configs);
+  }
+
+  /**
+   * Static factory method to create ZKProver from file paths (Node.js)
+   */
+  static fromFilePaths(circuitPath?: string): ZKProver {
+    if (isBrowser) {
+      throw new Error('fromFilePaths is not supported in browser environment. Use fromUrls instead.');
+    }
+
+    if (!fs || !path) {
+      throw new Error('Node.js file system modules not available');
+    }
+
+    const prover = new ZKProver(undefined, circuitPath);
+    prover.circuitConfigs = prover.loadCircuitConfigsFromFiles();
+    return prover;
+  }
+
+  /**
+   * Static factory method to create ZKProver from in-memory buffers
+   */
+  static fromBuffers(circuitBuffers: Record<string, {
+    wasmBuffer: ArrayBuffer;
+    zkeyBuffer: ArrayBuffer;
+    verifierData: any;
+  }>): ZKProver {
+    const configs = new Map<string, CircuitConfig>();
+
+    for (const [circuit, buffers] of Object.entries(circuitBuffers)) {
+      configs.set(circuit, {
+        wasmBuffer: buffers.wasmBuffer,
+        zkeyBuffer: buffers.zkeyBuffer,
+        verifierData: buffers.verifierData
+      });
+    }
+
+    return new ZKProver(configs);
+  }
+
+  /**
+   * Loads circuit configurations from files (Node.js only)
+   */
+  private loadCircuitConfigsFromFiles(): Map<string, CircuitConfig> {
+    if (isBrowser || !fs || !path) {
+      return new Map();
+    }
+
+    const configs = new Map<string, CircuitConfig>();
+
     const circuits = [
       'transfer',
-      'merkle', 
+      'merkle',
       'nullifier',
       'zkStream',
       'zkSplit',
@@ -38,9 +143,9 @@ export class ZKProver {
     ];
 
     circuits.forEach(circuit => {
-      const wasmPath = path.join(this.circuitPath, `${circuit}.wasm`);
-      const zkeyPath = path.join(this.circuitPath, `${circuit}.zkey`);
-      const verifierPath = path.join(this.circuitPath, `verifier-${circuit}.json`);
+      const wasmPath = path.join(this.circuitPath || '', `${circuit}.wasm`);
+      const zkeyPath = path.join(this.circuitPath || '', `${circuit}.zkey`);
+      const verifierPath = path.join(this.circuitPath || '', `verifier-${circuit}.json`);
 
       // Check if files exist
       if (fs.existsSync(wasmPath) && fs.existsSync(zkeyPath) && fs.existsSync(verifierPath)) {
@@ -53,6 +158,67 @@ export class ZKProver {
     });
 
     return configs;
+  }
+
+  /**
+   * Loads circuit files for a specific circuit type
+   */
+  private async loadCircuitFiles(circuitType: string): Promise<{
+    wasmBuffer: Uint8Array;
+    zkeyBuffer: Uint8Array;
+    verifierData: any;
+  }> {
+    const config = this.circuitConfigs.get(circuitType);
+    if (!config) {
+      throw new CipherPayError(
+        `${circuitType} circuit configuration not found`,
+        ErrorType.MISSING_DEPENDENCY,
+        { circuitType },
+        {
+          action: 'Load circuit configuration',
+          description: `${circuitType} circuit configuration is missing. Please ensure the circuit is properly configured.`
+        },
+        false
+      );
+    }
+
+    // If we already have buffers, use them
+    if (config.wasmBuffer && config.zkeyBuffer && config.verifierData) {
+      return {
+        wasmBuffer: new Uint8Array(config.wasmBuffer),
+        zkeyBuffer: new Uint8Array(config.zkeyBuffer),
+        verifierData: config.verifierData
+      };
+    }
+
+    // If we have file paths, load them (Node.js only)
+    if (config.wasmPath && config.zkeyPath && config.verifierPath) {
+      if (isBrowser) {
+        throw new Error('File paths are not supported in browser environment');
+      }
+      if (!fs) {
+        throw new Error('Node.js file system not available');
+      }
+
+      const [wasmBuffer, zkeyBuffer, verifierData] = await Promise.all([
+        fs.promises.readFile(config.wasmPath),
+        fs.promises.readFile(config.zkeyPath),
+        fs.promises.readFile(config.verifierPath, 'utf8').then((data: string) => JSON.parse(data))
+      ]);
+
+      return { wasmBuffer, zkeyBuffer, verifierData };
+    }
+
+    throw new CipherPayError(
+      `Incomplete circuit configuration for ${circuitType}`,
+      ErrorType.MISSING_DEPENDENCY,
+      { circuitType, config },
+      {
+        action: 'Provide complete circuit configuration',
+        description: `Circuit configuration for ${circuitType} is incomplete. Please provide either file paths or buffers.`
+      },
+      false
+    );
   }
 
   /**
@@ -69,19 +235,12 @@ export class ZKProver {
     });
 
     try {
-      const config = this.circuitConfigs.get('transfer');
-      if (!config) {
-        throw new CipherPayError(
-          'Transfer circuit files not found',
-          ErrorType.MISSING_DEPENDENCY,
-          { circuitType: 'transfer', circuitPath: this.circuitPath },
-          {
-            action: 'Install circuit files',
-            description: 'Transfer circuit files are missing. Please ensure the circuit files are properly installed.'
-          },
-          false
-        );
+      // Use snarkjs for all environments
+      if (!snarkjs) {
+        throw new Error('snarkjs not available');
       }
+
+      const { wasmBuffer, zkeyBuffer } = await this.loadCircuitFiles('transfer');
 
       // Prepare witness inputs for the circuit
       const witnessInput = this.prepareTransferWitness(input);
@@ -89,8 +248,8 @@ export class ZKProver {
       // Generate proof using snarkjs
       const { proof, publicSignals } = await snarkjs.groth16.fullProve(
         witnessInput,
-        config.wasmPath,
-        config.zkeyPath
+        wasmBuffer,
+        zkeyBuffer
       );
 
       return {
@@ -103,7 +262,7 @@ export class ZKProver {
       const cipherPayError = new CipherPayError(
         `Failed to generate transfer proof: ${errorMessage}`,
         ErrorType.PROOF_GENERATION_FAILED,
-        { 
+        {
           circuitType: 'transfer',
           inputNotes: input.inputNotes.length,
           outputNote: 'present'
@@ -114,7 +273,7 @@ export class ZKProver {
         },
         true
       );
-      
+
       throw ErrorHandler.getInstance().handleError(cipherPayError);
     }
   }
@@ -133,19 +292,12 @@ export class ZKProver {
     });
 
     try {
-      const config = this.circuitConfigs.get('withdraw');
-      if (!config) {
-        throw new CipherPayError(
-          'Withdraw circuit files not found',
-          ErrorType.MISSING_DEPENDENCY,
-          { circuitType: 'withdraw', circuitPath: this.circuitPath },
-          {
-            action: 'Install circuit files',
-            description: 'Withdraw circuit files are missing. Please ensure the circuit files are properly installed.'
-          },
-          false
-        );
+      // Use snarkjs for all environments
+      if (!snarkjs) {
+        throw new Error('snarkjs not available');
       }
+
+      const { wasmBuffer, zkeyBuffer } = await this.loadCircuitFiles('withdraw');
 
       // Prepare witness inputs for the circuit
       const witnessInput = this.prepareWithdrawWitness(input);
@@ -153,8 +305,8 @@ export class ZKProver {
       // Generate proof using snarkjs
       const { proof, publicSignals } = await snarkjs.groth16.fullProve(
         witnessInput,
-        config.wasmPath,
-        config.zkeyPath
+        wasmBuffer,
+        zkeyBuffer
       );
 
       return {
@@ -167,7 +319,7 @@ export class ZKProver {
       const cipherPayError = new CipherPayError(
         `Failed to generate withdraw proof: ${errorMessage}`,
         ErrorType.PROOF_GENERATION_FAILED,
-        { 
+        {
           circuitType: 'withdraw',
           inputNotes: input.inputNotes.length,
           recipientAddress: input.recipientAddress
@@ -178,7 +330,7 @@ export class ZKProver {
         },
         true
       );
-      
+
       throw ErrorHandler.getInstance().handleError(cipherPayError);
     }
   }
@@ -197,19 +349,7 @@ export class ZKProver {
     });
 
     try {
-      const config = this.circuitConfigs.get('transfer'); // Reshield uses transfer circuit
-      if (!config) {
-        throw new CipherPayError(
-          'Transfer circuit files not found',
-          ErrorType.MISSING_DEPENDENCY,
-          { circuitType: 'transfer', circuitPath: this.circuitPath },
-          {
-            action: 'Install circuit files',
-            description: 'Transfer circuit files are missing. Please ensure the circuit files are properly installed.'
-          },
-          false
-        );
-      }
+      const { wasmBuffer, zkeyBuffer } = await this.loadCircuitFiles('transfer'); // Reshield uses transfer circuit
 
       // Prepare witness inputs for the circuit
       const witnessInput = this.prepareReshieldWitness(input);
@@ -217,8 +357,8 @@ export class ZKProver {
       // Generate proof using snarkjs
       const { proof, publicSignals } = await snarkjs.groth16.fullProve(
         witnessInput,
-        config.wasmPath,
-        config.zkeyPath
+        wasmBuffer,
+        zkeyBuffer
       );
 
       return {
@@ -231,10 +371,10 @@ export class ZKProver {
       const cipherPayError = new CipherPayError(
         `Failed to generate reshield proof: ${errorMessage}`,
         ErrorType.PROOF_GENERATION_FAILED,
-        { 
-          circuitType: 'transfer',
+        {
+          circuitType: 'transfer', // Reshield uses transfer circuit
           inputNotes: input.inputNotes.length,
-          amount: input.amount.toString()
+          outputNote: 'present'
         },
         {
           action: 'Check circuit files and inputs',
@@ -242,7 +382,7 @@ export class ZKProver {
         },
         true
       );
-      
+
       throw ErrorHandler.getInstance().handleError(cipherPayError);
     }
   }
@@ -263,22 +403,12 @@ export class ZKProver {
     });
 
     try {
-      const config = this.circuitConfigs.get(circuitType);
-      if (!config) {
-        throw new CipherPayError(
-          `${circuitType} circuit files not found`,
-          ErrorType.MISSING_DEPENDENCY,
-          { circuitType, circuitPath: this.circuitPath },
-          {
-            action: 'Install circuit files',
-            description: `${circuitType} circuit files are missing. Please ensure the circuit files are properly installed.`
-          },
-          false
-        );
+      // Use snarkjs for all environments
+      if (!snarkjs) {
+        throw new Error('snarkjs not available');
       }
 
-      // Load verification key
-      const verificationKey = JSON.parse(fs.readFileSync(config.verifierPath, 'utf8'));
+      const { verifierData } = await this.loadCircuitFiles(circuitType);
 
       // Add curve property to proof if missing
       const proofWithCurve = {
@@ -287,15 +417,15 @@ export class ZKProver {
       };
 
       // Verify the proof using snarkjs
-      const isValid = await snarkjs.groth16.verify(verificationKey, publicInputs, proofWithCurve);
-      
+      const isValid = await snarkjs.groth16.verify(verifierData, publicInputs, proofWithCurve);
+
       return isValid;
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       const cipherPayError = new CipherPayError(
         `Failed to verify proof: ${errorMessage}`,
         ErrorType.PROOF_VERIFICATION_FAILED,
-        { 
+        {
           circuitType,
           publicInputsCount: publicInputs.length,
           proofTimestamp: proof.timestamp
@@ -306,73 +436,63 @@ export class ZKProver {
         },
         true
       );
-      
+
       throw ErrorHandler.getInstance().handleError(cipherPayError);
     }
   }
 
   /**
-   * Prepares witness inputs for transfer circuit
+   * Prepares witness inputs for transfer proof generation
    */
   private prepareTransferWitness(input: TransferProofInput): any {
     // This is a simplified witness preparation
-    // In a real implementation, this would match the exact circuit input format
+    // In a real implementation, this would include proper circuit-specific witness generation
     return {
-      // Input notes
-      inputNote1Amount: input.inputNotes[0].amount.toString(),
-      inputNote1Nullifier: input.inputNotes[0].nullifier,
-      inputNote1Commitment: input.inputNotes[0].commitment,
-      
-      // Output note
-      outputNoteAmount: input.outputNote.amount.toString(),
-      outputNoteCommitment: input.outputNote.commitment,
-      outputNoteNullifier: input.outputNote.nullifier,
-      
-      // Public inputs
-      recipientAddress: input.outputNote.recipientAddress,
-      
-      // Private inputs
-      viewKey: input.viewKey,
-      randomSeed: Math.floor(Math.random() * 1000000).toString()
+      inputNotes: input.inputNotes.map(note => ({
+        commitment: note.commitment,
+        nullifier: note.nullifier,
+        amount: note.amount,
+        recipientAddress: note.recipientAddress
+      })),
+      outputNote: {
+        commitment: input.outputNote.commitment,
+        amount: input.outputNote.amount,
+        recipientAddress: input.outputNote.recipientAddress
+      },
+      viewKey: input.viewKey || '0x0000000000000000000000000000000000000000000000000000000000000000'
     };
   }
 
   /**
-   * Prepares witness inputs for withdraw circuit
+   * Prepares witness inputs for withdraw proof generation
    */
   private prepareWithdrawWitness(input: WithdrawProofInput): any {
     return {
-      // Input notes
-      inputNote1Amount: input.inputNotes[0].amount.toString(),
-      inputNote1Nullifier: input.inputNotes[0].nullifier,
-      inputNote1Commitment: input.inputNotes[0].commitment,
-      
-      // Withdrawal details
-      withdrawAmount: input.amount.toString(),
+      inputNotes: input.inputNotes.map(note => ({
+        commitment: note.commitment,
+        nullifier: note.nullifier,
+        amount: note.amount,
+        recipientAddress: note.recipientAddress
+      })),
       recipientAddress: input.recipientAddress,
-      
-      // Private inputs
-      viewKey: input.viewKey,
-      randomSeed: Math.floor(Math.random() * 1000000).toString()
+      amount: input.amount,
+      viewKey: input.viewKey || '0x0000000000000000000000000000000000000000000000000000000000000000'
     };
   }
 
   /**
-   * Prepares witness inputs for reshield circuit
+   * Prepares witness inputs for reshield proof generation
    */
   private prepareReshieldWitness(input: ReshieldProofInput): any {
     return {
-      // Input note
-      inputNoteAmount: input.inputNotes[0].amount.toString(),
-      inputNoteNullifier: input.inputNotes[0].nullifier,
-      inputNoteCommitment: input.inputNotes[0].commitment,
-      
-      // Reshield details
-      reshieldAmount: input.amount.toString(),
-      
-      // Private inputs
-      viewKey: input.viewKey,
-      randomSeed: Math.floor(Math.random() * 1000000).toString()
+      inputNotes: input.inputNotes.map(note => ({
+        commitment: note.commitment,
+        nullifier: note.nullifier,
+        amount: note.amount,
+        recipientAddress: note.recipientAddress
+      })),
+      amount: input.amount,
+      viewKey: input.viewKey || '0x0000000000000000000000000000000000000000000000000000000000000000'
     };
   }
 
@@ -384,7 +504,7 @@ export class ZKProver {
   }
 
   /**
-   * Checks if a circuit is available
+   * Checks if a circuit type is available
    */
   isCircuitAvailable(circuitType: string): boolean {
     return this.circuitConfigs.has(circuitType);

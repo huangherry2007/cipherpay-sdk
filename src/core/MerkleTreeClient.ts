@@ -11,12 +11,16 @@ export interface MerkleProof {
 }
 
 export class MerkleTreeClient {
-  private contract: ethers.Contract;
+  private contract?: ethers.Contract;
   private tree: MerkleTree;
   private leaves: string[];
+  private chainType: string;
+  private relayerUrl?: string;
 
-  constructor(contractInstance: ethers.Contract) {
+  constructor(contractInstance?: ethers.Contract, chainType: string = 'evm', relayerUrl?: string) {
     this.contract = contractInstance;
+    this.chainType = chainType;
+    this.relayerUrl = relayerUrl;
     this.leaves = [];
     this.tree = new MerkleTree([], (data: any) => poseidon1(data).toString(), { sortPairs: true });
   }
@@ -29,18 +33,46 @@ export class MerkleTreeClient {
     // Apply rate limiting for merkle operations
     globalRateLimiter.consume('MERKLE_OPERATIONS', {
       operation: 'fetch_root',
-      contractAddress: this.contract.address
+      chainType: this.chainType
     });
 
     try {
-      const root = await this.contract.getMerkleRoot();
-      return root;
+      if (this.chainType === 'solana') {
+        // For Solana, fetch from relayer API
+        if (!this.relayerUrl) {
+          throw new Error('Relayer URL not configured for Solana');
+        }
+
+        const response = await fetch(`${this.relayerUrl}/api/v1/merkle/root`);
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+
+        const data = await response.json();
+        if (!data.success) {
+          throw new Error(data.error || 'Failed to fetch merkle root from relayer');
+        }
+
+        return data.root;
+      } else {
+        // For EVM, use contract method
+        if (!this.contract) {
+          throw new Error('Contract not initialized for EVM');
+        }
+
+        const root = await this.contract.getMerkleRoot();
+        return root;
+      }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       const cipherPayError = new CipherPayError(
         `Failed to fetch Merkle root: ${errorMessage}`,
         ErrorType.NETWORK_ERROR,
-        { contractAddress: this.contract.address },
+        {
+          chainType: this.chainType,
+          contractAddress: this.contract?.address,
+          relayerUrl: this.relayerUrl
+        },
         {
           action: 'Check network connection',
           description: 'Failed to fetch Merkle root from blockchain. Please check your network connection.'
@@ -61,33 +93,63 @@ export class MerkleTreeClient {
     globalRateLimiter.consume('MERKLE_OPERATIONS', {
       operation: 'get_path',
       commitment,
-      contractAddress: this.contract.address
+      chainType: this.chainType
     });
 
     try {
       // Get the current root
       const root = await this.fetchMerkleRoot();
 
-      // Get the proof from the contract
-      const proof = await this.contract.getMerkleProof(commitment);
-      
-      // Convert the proof to the expected format
-      const path = proof.path;
-      const indices = proof.indices;
+      if (this.chainType === 'solana') {
+        // For Solana, fetch from relayer API
+        if (!this.relayerUrl) {
+          throw new Error('Relayer URL not configured for Solana');
+        }
 
-      return {
-        path,
-        indices,
-        root
-      };
+        const response = await fetch(`${this.relayerUrl}/api/v1/merkle/path/${commitment}`);
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+
+        const data = await response.json();
+        if (!data.success) {
+          throw new Error(data.error || 'Failed to fetch merkle path from relayer');
+        }
+
+        return {
+          path: data.path || [],
+          indices: data.indices || [],
+          root
+        };
+      } else {
+        // For EVM, use contract method
+        if (!this.contract) {
+          throw new Error('Contract not initialized for EVM');
+        }
+
+        // Get the proof from the contract
+        const proof = await this.contract.getMerkleProof(commitment);
+
+        // Convert the proof to the expected format
+        const path = proof.path;
+        const indices = proof.indices;
+
+        return {
+          path,
+          indices,
+          root
+        };
+      }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       const cipherPayError = new CipherPayError(
         `Failed to get Merkle path: ${errorMessage}`,
         ErrorType.NETWORK_ERROR,
-        { 
+        {
           commitment,
-          contractAddress: this.contract.address
+          chainType: this.chainType,
+          contractAddress: this.contract?.address,
+          relayerUrl: this.relayerUrl
         },
         {
           action: 'Check commitment and network',
@@ -120,14 +182,14 @@ export class MerkleTreeClient {
 
     try {
       let current = commitment;
-      
+
       // Reconstruct the path
       for (let i = 0; i < proof.path.length; i++) {
         const sibling = proof.path[i];
         const isLeft = proof.indices[i] === 0;
-        
+
         // Hash the pair in the correct order
-        current = isLeft 
+        current = isLeft
           ? hashFn([current, sibling])
           : hashFn([sibling, current]);
       }
@@ -139,7 +201,7 @@ export class MerkleTreeClient {
       const cipherPayError = new CipherPayError(
         `Failed to verify Merkle path: ${errorMessage}`,
         ErrorType.PROOF_VERIFICATION_FAILED,
-        { 
+        {
           commitment,
           proofLength: proof.path.length,
           root: proof.root
@@ -169,7 +231,7 @@ export class MerkleTreeClient {
     try {
       // Add new leaves
       this.leaves = [...this.leaves, ...newLeaves];
-      
+
       // Rebuild the tree
       this.tree = new MerkleTree(this.leaves, (data: any) => poseidon1(data).toString(), { sortPairs: true });
     } catch (error) {
@@ -177,7 +239,7 @@ export class MerkleTreeClient {
       const cipherPayError = new CipherPayError(
         `Failed to update Merkle tree: ${errorMessage}`,
         ErrorType.INVALID_INPUT,
-        { 
+        {
           newLeavesCount: newLeaves.length,
           totalLeaves: this.leaves.length
         },

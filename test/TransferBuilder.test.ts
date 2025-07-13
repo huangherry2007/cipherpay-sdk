@@ -75,11 +75,11 @@ describe('TransferBuilder', () => {
         ethers = require('ethers').ethers;
         WalletProvider = require('../src/core/WalletProvider').WalletProvider;
         TransferBuilder = require('../src/tx/TransferBuilder').TransferBuilder;
-        
+
         // Initialize components
         walletProvider = new WalletProvider('ethereum', { rpcUrl: 'http://localhost:8545' });
         noteManager = new NoteManager();
-        zkProver = new ZKProver('./circuits');
+        zkProver = new ZKProver();
         transferBuilder = new TransferBuilder(
             walletProvider,
             noteManager,

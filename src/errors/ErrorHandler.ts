@@ -7,44 +7,50 @@ export enum ErrorType {
   NETWORK_ERROR = 'NETWORK_ERROR',
   RPC_CONNECTION_FAILED = 'RPC_CONNECTION_FAILED',
   TIMEOUT_ERROR = 'TIMEOUT_ERROR',
-  
+
   // Cryptographic and proof errors
   PROOF_GENERATION_FAILED = 'PROOF_GENERATION_FAILED',
   PROOF_VERIFICATION_FAILED = 'PROOF_VERIFICATION_FAILED',
   ENCRYPTION_ERROR = 'ENCRYPTION_ERROR',
   DECRYPTION_ERROR = 'DECRYPTION_ERROR',
-  
+
   // Wallet and key management errors
   WALLET_CONNECTION_FAILED = 'WALLET_CONNECTION_FAILED',
   INSUFFICIENT_FUNDS = 'INSUFFICIENT_FUNDS',
   INVALID_PRIVATE_KEY = 'INVALID_PRIVATE_KEY',
   HARDWARE_WALLET_ERROR = 'HARDWARE_WALLET_ERROR',
-  
+
   // Note and transaction errors
   NOTE_NOT_FOUND = 'NOTE_NOT_FOUND',
   NOTE_ALREADY_SPENT = 'NOTE_ALREADY_SPENT',
   INVALID_NOTE_FORMAT = 'INVALID_NOTE_FORMAT',
   TRANSACTION_FAILED = 'TRANSACTION_FAILED',
-  
+
   // Validation errors
   INVALID_INPUT = 'INVALID_INPUT',
   INVALID_ADDRESS = 'INVALID_ADDRESS',
   INVALID_AMOUNT = 'INVALID_AMOUNT',
-  
+
   // Configuration errors
   CONFIGURATION_ERROR = 'CONFIGURATION_ERROR',
   MISSING_DEPENDENCY = 'MISSING_DEPENDENCY',
-  
+
   // Rate limiting and quota errors
   RATE_LIMIT_EXCEEDED = 'RATE_LIMIT_EXCEEDED',
   QUOTA_EXCEEDED = 'QUOTA_EXCEEDED',
-  
+
   // Compliance and audit errors
   COMPLIANCE_VIOLATION = 'COMPLIANCE_VIOLATION',
   AUDIT_FAILED = 'AUDIT_FAILED',
-  
+
   // Unknown errors
-  UNKNOWN_ERROR = 'UNKNOWN_ERROR'
+  UNKNOWN_ERROR = 'UNKNOWN_ERROR',
+
+  // Circuit breaker errors
+  CIRCUIT_BREAKER_OPEN = 'CIRCUIT_BREAKER_OPEN',
+
+  // Generic errors
+  NOT_FOUND = 'NOT_FOUND'
 }
 
 export interface ErrorContext {
@@ -91,7 +97,7 @@ export class CipherPayError extends Error {
     this.retryable = retryable;
     this.timestamp = Date.now();
     this.correlationId = this.generateCorrelationId();
-    
+
     // Ensure proper stack trace
     if (Error.captureStackTrace) {
       Error.captureStackTrace(this, CipherPayError);
@@ -128,7 +134,7 @@ export class ErrorHandler {
   private errorCounts: Map<ErrorType, number> = new Map();
   private readonly maxErrorCount = 1000;
 
-  private constructor() {}
+  private constructor() { }
 
   public static getInstance(): ErrorHandler {
     if (!ErrorHandler.instance) {

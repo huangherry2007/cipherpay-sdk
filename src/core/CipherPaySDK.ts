@@ -81,27 +81,27 @@ export interface WithdrawResult {
 export class CipherPaySDK {
   private readonly config: CipherPaySDKConfig;
   private readonly logger: Logger;
-  
+
   // Core components
   public readonly noteManager: NoteManager;
   public readonly viewKeyManager: ViewKeyManager;
   public readonly walletProvider: WalletProvider;
   public readonly merkleTreeClient: MerkleTreeClient;
-  
+
   // Transaction components
   public readonly transactionBuilder: TransactionBuilder;
   public readonly transactionSigner: TransactionSigner;
   public readonly reshieldBuilder: ReshieldBuilder;
   public readonly withdrawBuilder: WithdrawBuilder;
-  
+
   // ZK components
-  public readonly zkProver: ZKProver;
-  public readonly zkProofGenerator: ZKProofGenerator;
-  
+  public zkProver: ZKProver;
+  public zkProofGenerator?: ZKProofGenerator;
+
   // Relayer and events
   public readonly relayerClient: RelayerClient;
   public readonly eventMonitor: EventMonitor;
-  
+
   // Phase 2 enhancements
   public readonly stealthAddressManager?: StealthAddressManager;
   public readonly complianceManager?: ComplianceManager;
@@ -117,15 +117,21 @@ export class CipherPaySDK {
     this.walletProvider = new WalletProvider(config.chainType, {
       rpcUrl: config.rpcUrl
     });
-    
-    // Initialize MerkleTreeClient with a mock contract for now
-    const mockContract = {} as any; // This would be replaced with actual contract instance
-    this.merkleTreeClient = new MerkleTreeClient(mockContract);
 
-    // Initialize transaction components
-    this.zkProver = new ZKProver();
-    this.zkProofGenerator = new ZKProofGenerator('mock-wasm-path', 'mock-zkey-path', 'mock-verifier-path');
-    
+    // Initialize MerkleTreeClient with chain-specific configuration
+    if (config.chainType === 'solana') {
+      // For Solana, initialize without contract but with relayer URL
+      this.merkleTreeClient = new MerkleTreeClient(undefined, 'solana', config.relayerUrl);
+    } else {
+      // For EVM, initialize with mock contract (would be replaced with actual contract instance)
+      const mockContract = {} as any; // This would be replaced with actual contract instance
+      this.merkleTreeClient = new MerkleTreeClient(mockContract, 'evm');
+    }
+
+    // Initialize transaction components - ZK components will be configured later with circuit files
+    this.zkProver = new ZKProver(); // Will be configured later with circuit files
+    // ZKProofGenerator will be initialized when configureZKComponents is called
+
     // Initialize relayer first since TransactionBuilder needs it
     this.relayerClient = new RelayerClient({
       chainType: config.chainType,
@@ -134,7 +140,7 @@ export class CipherPaySDK {
       timeout: 30000,
       retryDelay: 1000
     });
-    
+
     this.transactionBuilder = new TransactionBuilder(
       this.relayerClient,
       this.walletProvider,
@@ -144,7 +150,7 @@ export class CipherPaySDK {
         retryDelay: 1000
       }
     );
-    
+
     this.transactionSigner = new TransactionSigner(
       this.noteManager,
       this.viewKeyManager,
@@ -153,18 +159,26 @@ export class CipherPaySDK {
         rpcUrl: config.rpcUrl
       }
     );
-    
+
+    // These builders will be initialized when ZK components are configured
+    // For now, create them with placeholder ZKProofGenerator instances
+    const placeholderZKGenerator = new ZKProofGenerator({
+      wasmBuffer: new ArrayBuffer(0),
+      zkeyBuffer: new ArrayBuffer(0),
+      verificationKey: {}
+    });
+
     this.reshieldBuilder = new ReshieldBuilder(
       this.noteManager,
       this.viewKeyManager,
-      this.zkProofGenerator,
+      placeholderZKGenerator,
       config.chainType
     );
-    
+
     this.withdrawBuilder = new WithdrawBuilder(
       this.noteManager,
       this.viewKeyManager,
-      this.zkProofGenerator,
+      placeholderZKGenerator,
       config.chainType
     );
 
@@ -193,6 +207,61 @@ export class CipherPaySDK {
     }
 
     this.logger.info('CipherPay SDK initialized', { config: { chainType: config.chainType } });
+  }
+
+  /**
+   * Connects to a wallet
+   * @returns Wallet information
+   */
+  async connectWallet(): Promise<any> {
+    try {
+      this.logger.info('Attempting to connect wallet...');
+      const result = await this.walletProvider.connect();
+      this.logger.info('Wallet connected successfully', { address: result.address });
+      return result;
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      this.logger.error('Failed to connect wallet', { error: errorMessage });
+      throw error;
+    }
+  }
+
+  /**
+   * Disconnects from the wallet
+   */
+  async disconnectWallet(): Promise<void> {
+    try {
+      this.logger.info('Disconnecting wallet...');
+      await this.walletProvider.disconnect();
+      this.logger.info('Wallet disconnected successfully');
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      this.logger.error('Failed to disconnect wallet', { error: errorMessage });
+      throw error;
+    }
+  }
+
+  /**
+   * Gets the current wallet information
+   * @returns Wallet information or null if not connected
+   */
+  getWalletInfo(): any {
+    if (!this.walletProvider.isConnected()) {
+      return null;
+    }
+    return {
+      address: this.walletProvider.getAddress(),
+      chainType: this.walletProvider.getChainType(),
+      connected: this.walletProvider.isConnected()
+    };
+  }
+
+  /**
+   * Checks if wallet is connected
+   * @returns True if wallet is connected
+   */
+  isWalletConnected(): boolean {
+    return this.walletProvider.isConnected();
   }
 
   /**
@@ -243,7 +312,7 @@ export class CipherPaySDK {
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       this.logger.error('Transfer failed', { error: errorMessage, request });
-      
+
       return {
         success: false,
         error: `Transfer failed: ${errorMessage}`
@@ -290,7 +359,7 @@ export class CipherPaySDK {
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       this.logger.error('Withdrawal failed', { error: errorMessage, request });
-      
+
       return {
         success: false,
         error: `Withdrawal failed: ${errorMessage}`
@@ -323,6 +392,36 @@ export class CipherPaySDK {
   }
 
   /**
+   * Configures ZK components with circuit files (browser-compatible)
+   */
+  async configureZKComponents(circuitUrls: Record<string, {
+    wasmUrl: string;
+    zkeyUrl: string;
+    verifierUrl: string;
+  }>): Promise<void> {
+    try {
+      // Configure ZKProver with circuit URLs
+      this.zkProver = await ZKProver.fromUrls(circuitUrls);
+
+      // Configure ZKProofGenerator with the first circuit (assuming they're compatible)
+      const firstCircuit = Object.values(circuitUrls)[0];
+      if (firstCircuit) {
+        this.zkProofGenerator = await ZKProofGenerator.fromUrls({
+          wasmUrl: firstCircuit.wasmUrl,
+          zkeyUrl: firstCircuit.zkeyUrl,
+          verificationKeyUrl: firstCircuit.verifierUrl
+        });
+      }
+
+      this.logger.info('ZK components configured successfully', { circuitCount: Object.keys(circuitUrls).length });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      this.logger.error('Failed to configure ZK components', { error: errorMessage });
+      throw error;
+    }
+  }
+
+  /**
    * Starts event monitoring
    */
   async startEventMonitoring(): Promise<void> {
@@ -342,7 +441,7 @@ export class CipherPaySDK {
    * @param endTime End timestamp
    * @returns Compliance report
    */
-  generateComplianceReport(startTime: number, endTime: number) {
+  generateComplianceReport(startTime: number, endTime: number): any {
     if (!this.complianceManager) {
       throw new Error('Compliance manager not enabled');
     }
@@ -353,7 +452,7 @@ export class CipherPaySDK {
    * Gets cache statistics
    * @returns Cache statistics
    */
-  getCacheStats() {
+  getCacheStats(): any {
     if (!this.cacheManager) {
       throw new Error('Cache manager not enabled');
     }

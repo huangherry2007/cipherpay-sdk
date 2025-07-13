@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+    <title>CipherPay SDK Test</title>
+</head>
+
+<body>
+    <h1>CipherPay SDK Browser Test</h1>
+    <div id="output"></div>
+
+    <script src="dist/cipherpay-sdk.browser.js"></script>
+    <script>
+        console.log('Testing CipherPay SDK...');
+
+        try {
+            // Check if SDK is available globally
+            if (typeof window.CipherPaySDK !== 'undefined') {
+                console.log('✅ CipherPaySDK found in global scope');
+                document.getElementById('output').innerHTML += '<p>✅ CipherPaySDK found in global scope</p>';
+
+                // Try to create an instance
+                const sdk = new window.CipherPaySDK({
+                    chainType: 'solana',
+                    rpcUrl: 'http://localhost:8899'
+                });
+
+                console.log('✅ SDK instance created successfully');
+                document.getElementById('output').innerHTML += '<p>✅ SDK instance created successfully</p>';
+
+                // Check available methods
+                const methods = Object.getOwnPropertyNames(Object.getPrototypeOf(sdk));
+                console.log('Available methods:', methods);
+                document.getElementById('output').innerHTML += '<p>Available methods: ' + methods.join(', ') + '</p>';
+
+            } else {
+                console.log('❌ CipherPaySDK not found in global scope');
+                document.getElementById('output').innerHTML += '<p>❌ CipherPaySDK not found in global scope</p>';
+            }
+        } catch (error) {
+            console.error('Error testing SDK:', error);
+            document.getElementById('output').innerHTML += '<p>❌ Error: ' + error.message + '</p>';
+        }
+    </script>
+</body>
+
+</html>
